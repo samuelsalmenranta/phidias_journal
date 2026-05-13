@@ -13,6 +13,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedStrategiesRouteImport } from './routes/_authenticated/strategies'
+import { Route as AuthenticatedLokiRouteImport } from './routes/_authenticated/loki'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -33,15 +34,22 @@ const AuthenticatedStrategiesRoute = AuthenticatedStrategiesRouteImport.update({
   path: '/strategies',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedLokiRoute = AuthenticatedLokiRouteImport.update({
+  id: '/loki',
+  path: '/loki',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/loki': typeof AuthenticatedLokiRoute
   '/strategies': typeof AuthenticatedStrategiesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/loki': typeof AuthenticatedLokiRoute
   '/strategies': typeof AuthenticatedStrategiesRoute
 }
 export interface FileRoutesById {
@@ -49,18 +57,20 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/login': typeof LoginRoute
+  '/_authenticated/loki': typeof AuthenticatedLokiRoute
   '/_authenticated/strategies': typeof AuthenticatedStrategiesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/strategies'
+  fullPaths: '/' | '/login' | '/loki' | '/strategies'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/strategies'
+  to: '/' | '/login' | '/loki' | '/strategies'
   id:
     | '__root__'
     | '/'
     | '/_authenticated'
     | '/login'
+    | '/_authenticated/loki'
     | '/_authenticated/strategies'
   fileRoutesById: FileRoutesById
 }
@@ -100,14 +110,23 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedStrategiesRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/loki': {
+      id: '/_authenticated/loki'
+      path: '/loki'
+      fullPath: '/loki'
+      preLoaderRoute: typeof AuthenticatedLokiRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
   }
 }
 
 interface AuthenticatedRouteChildren {
+  AuthenticatedLokiRoute: typeof AuthenticatedLokiRoute
   AuthenticatedStrategiesRoute: typeof AuthenticatedStrategiesRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
+  AuthenticatedLokiRoute: AuthenticatedLokiRoute,
   AuthenticatedStrategiesRoute: AuthenticatedStrategiesRoute,
 }
 
