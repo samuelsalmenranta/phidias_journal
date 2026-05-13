@@ -14,7 +14,207 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      daily_notes: {
+        Row: {
+          created_at: string
+          execution_notes: string | null
+          id: string
+          lessons: string | null
+          lucid_eod_day: string
+          market_notes: string | null
+          mistakes: string | null
+          tomorrow_focus: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          execution_notes?: string | null
+          id?: string
+          lessons?: string | null
+          lucid_eod_day: string
+          market_notes?: string | null
+          mistakes?: string | null
+          tomorrow_focus?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          execution_notes?: string | null
+          id?: string
+          lessons?: string | null
+          lucid_eod_day?: string
+          market_notes?: string | null
+          mistakes?: string | null
+          tomorrow_focus?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      settings: {
+        Row: {
+          active_portfolio_mode: string | null
+          commission_es_per_side: number | null
+          commission_hg_per_side: number | null
+          commission_ym_per_side: number | null
+          created_at: string
+          default_slippage_ticks: number | null
+          default_timezone: string | null
+          id: string
+          user_id: string
+        }
+        Insert: {
+          active_portfolio_mode?: string | null
+          commission_es_per_side?: number | null
+          commission_hg_per_side?: number | null
+          commission_ym_per_side?: number | null
+          created_at?: string
+          default_slippage_ticks?: number | null
+          default_timezone?: string | null
+          id?: string
+          user_id: string
+        }
+        Update: {
+          active_portfolio_mode?: string | null
+          commission_es_per_side?: number | null
+          commission_hg_per_side?: number | null
+          commission_ym_per_side?: number | null
+          created_at?: string
+          default_slippage_ticks?: number | null
+          default_timezone?: string | null
+          id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      trades: {
+        Row: {
+          body_fraction: number | null
+          body_pct: number | null
+          commissions_current: number | null
+          commissions_optimized: number | null
+          confirm_value: number | null
+          created_at: string
+          current_qty: number | null
+          date_et: string | null
+          direction: string | null
+          entry_price_actual: number | null
+          entry_price_theoretical: number | null
+          entry_time_et: string | null
+          estimated_slippage_current: number | null
+          estimated_slippage_optimized: number | null
+          exit_price_actual: number | null
+          exit_price_theoretical: number | null
+          exit_reason: string | null
+          exit_time_et: string | null
+          gap_pct: number | null
+          gross_pnl_current: number | null
+          gross_pnl_optimized: number | null
+          id: string
+          lucid_eod_day: string | null
+          net_pnl_current: number | null
+          net_pnl_optimized: number | null
+          notes: string | null
+          optimized_qty: number | null
+          portfolio_version: string | null
+          rule_error_type: string | null
+          rule_followed: boolean | null
+          setup_value: number | null
+          signal_time_et: string | null
+          slippage_ticks: number | null
+          stop_price: number | null
+          strategy_name: string | null
+          symbol: string
+          target_price: number | null
+          trade_status: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          body_fraction?: number | null
+          body_pct?: number | null
+          commissions_current?: number | null
+          commissions_optimized?: number | null
+          confirm_value?: number | null
+          created_at?: string
+          current_qty?: number | null
+          date_et?: string | null
+          direction?: string | null
+          entry_price_actual?: number | null
+          entry_price_theoretical?: number | null
+          entry_time_et?: string | null
+          estimated_slippage_current?: number | null
+          estimated_slippage_optimized?: number | null
+          exit_price_actual?: number | null
+          exit_price_theoretical?: number | null
+          exit_reason?: string | null
+          exit_time_et?: string | null
+          gap_pct?: number | null
+          gross_pnl_current?: number | null
+          gross_pnl_optimized?: number | null
+          id?: string
+          lucid_eod_day?: string | null
+          net_pnl_current?: number | null
+          net_pnl_optimized?: number | null
+          notes?: string | null
+          optimized_qty?: number | null
+          portfolio_version?: string | null
+          rule_error_type?: string | null
+          rule_followed?: boolean | null
+          setup_value?: number | null
+          signal_time_et?: string | null
+          slippage_ticks?: number | null
+          stop_price?: number | null
+          strategy_name?: string | null
+          symbol: string
+          target_price?: number | null
+          trade_status?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          body_fraction?: number | null
+          body_pct?: number | null
+          commissions_current?: number | null
+          commissions_optimized?: number | null
+          confirm_value?: number | null
+          created_at?: string
+          current_qty?: number | null
+          date_et?: string | null
+          direction?: string | null
+          entry_price_actual?: number | null
+          entry_price_theoretical?: number | null
+          entry_time_et?: string | null
+          estimated_slippage_current?: number | null
+          estimated_slippage_optimized?: number | null
+          exit_price_actual?: number | null
+          exit_price_theoretical?: number | null
+          exit_reason?: string | null
+          exit_time_et?: string | null
+          gap_pct?: number | null
+          gross_pnl_current?: number | null
+          gross_pnl_optimized?: number | null
+          id?: string
+          lucid_eod_day?: string | null
+          net_pnl_current?: number | null
+          net_pnl_optimized?: number | null
+          notes?: string | null
+          optimized_qty?: number | null
+          portfolio_version?: string | null
+          rule_error_type?: string | null
+          rule_followed?: boolean | null
+          setup_value?: number | null
+          signal_time_et?: string | null
+          slippage_ticks?: number | null
+          stop_price?: number | null
+          strategy_name?: string | null
+          symbol?: string
+          target_price?: number | null
+          trade_status?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
