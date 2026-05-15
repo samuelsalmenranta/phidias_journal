@@ -88,6 +88,8 @@ export type Database = {
       }
       trades: {
         Row: {
+          actual_minus_theoretical: number | null
+          actual_pnl: number | null
           body_fraction: number | null
           body_pct: number | null
           commissions_current: number | null
@@ -95,6 +97,7 @@ export type Database = {
           confirm_value: number | null
           created_at: string
           current_qty: number | null
+          current_session_open: number | null
           date_et: string | null
           direction: string | null
           entry_price_actual: number | null
@@ -107,17 +110,23 @@ export type Database = {
           exit_reason: string | null
           exit_time_et: string | null
           gap_pct: number | null
+          gc_watch_flags: string | null
           gross_pnl_current: number | null
           gross_pnl_optimized: number | null
           id: string
           lucid_eod_day: string | null
+          mini_equivalent: number | null
+          move_pct: number | null
           net_pnl_current: number | null
           net_pnl_optimized: number | null
           notes: string | null
           optimized_qty: number | null
           portfolio_version: string | null
+          prev_context_close: number | null
+          prev_context_open: number | null
           rule_error_type: string | null
           rule_followed: boolean | null
+          session_name: string | null
           setup_value: number | null
           signal_time_et: string | null
           slippage_ticks: number | null
@@ -125,11 +134,14 @@ export type Database = {
           strategy_name: string | null
           symbol: string
           target_price: number | null
+          theoretical_pnl: number | null
           trade_status: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
+          actual_minus_theoretical?: number | null
+          actual_pnl?: number | null
           body_fraction?: number | null
           body_pct?: number | null
           commissions_current?: number | null
@@ -137,6 +149,7 @@ export type Database = {
           confirm_value?: number | null
           created_at?: string
           current_qty?: number | null
+          current_session_open?: number | null
           date_et?: string | null
           direction?: string | null
           entry_price_actual?: number | null
@@ -149,17 +162,23 @@ export type Database = {
           exit_reason?: string | null
           exit_time_et?: string | null
           gap_pct?: number | null
+          gc_watch_flags?: string | null
           gross_pnl_current?: number | null
           gross_pnl_optimized?: number | null
           id?: string
           lucid_eod_day?: string | null
+          mini_equivalent?: number | null
+          move_pct?: number | null
           net_pnl_current?: number | null
           net_pnl_optimized?: number | null
           notes?: string | null
           optimized_qty?: number | null
           portfolio_version?: string | null
+          prev_context_close?: number | null
+          prev_context_open?: number | null
           rule_error_type?: string | null
           rule_followed?: boolean | null
+          session_name?: string | null
           setup_value?: number | null
           signal_time_et?: string | null
           slippage_ticks?: number | null
@@ -167,11 +186,14 @@ export type Database = {
           strategy_name?: string | null
           symbol: string
           target_price?: number | null
+          theoretical_pnl?: number | null
           trade_status?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
+          actual_minus_theoretical?: number | null
+          actual_pnl?: number | null
           body_fraction?: number | null
           body_pct?: number | null
           commissions_current?: number | null
@@ -179,6 +201,7 @@ export type Database = {
           confirm_value?: number | null
           created_at?: string
           current_qty?: number | null
+          current_session_open?: number | null
           date_et?: string | null
           direction?: string | null
           entry_price_actual?: number | null
@@ -191,17 +214,23 @@ export type Database = {
           exit_reason?: string | null
           exit_time_et?: string | null
           gap_pct?: number | null
+          gc_watch_flags?: string | null
           gross_pnl_current?: number | null
           gross_pnl_optimized?: number | null
           id?: string
           lucid_eod_day?: string | null
+          mini_equivalent?: number | null
+          move_pct?: number | null
           net_pnl_current?: number | null
           net_pnl_optimized?: number | null
           notes?: string | null
           optimized_qty?: number | null
           portfolio_version?: string | null
+          prev_context_close?: number | null
+          prev_context_open?: number | null
           rule_error_type?: string | null
           rule_followed?: boolean | null
+          session_name?: string | null
           setup_value?: number | null
           signal_time_et?: string | null
           slippage_ticks?: number | null
@@ -209,6 +238,7 @@ export type Database = {
           strategy_name?: string | null
           symbol?: string
           target_price?: number | null
+          theoretical_pnl?: number | null
           trade_status?: string | null
           updated_at?: string
           user_id?: string
