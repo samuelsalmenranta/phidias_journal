@@ -5,8 +5,12 @@ import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, ReferenceLine } from "recharts";
-import { TICK } from "@/lib/strategies";
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  BarChart, Bar, CartesianGrid, ReferenceLine,
+} from "recharts";
+import { TICK, STRATEGIES, LUCID_EV_CONTEXT, type Symbol } from "@/lib/strategies";
+import { AlertTriangle } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/tulokset")({
   component: ResultsPage,
@@ -23,11 +27,17 @@ type T = {
   net_pnl_optimized: number | null;
   gross_pnl_current: number | null;
   gross_pnl_optimized: number | null;
+  theoretical_pnl: number | null;
+  actual_pnl: number | null;
+  actual_minus_theoretical: number | null;
   entry_price_actual: number | null;
   entry_price_theoretical: number | null;
   rule_followed: boolean | null;
   entry_time_et: string | null;
+  mini_equivalent: number | null;
 };
+
+const SYMBOLS: Symbol[] = ["YM", "HG", "MES", "GC"];
 
 function ResultsPage() {
   const { user } = useAuth();
@@ -40,127 +50,165 @@ function ResultsPage() {
       setLoading(true);
       const { data } = await supabase
         .from("trades")
-        .select("id,date_et,lucid_eod_day,symbol,trade_status,exit_reason,net_pnl_current,net_pnl_optimized,gross_pnl_current,gross_pnl_optimized,entry_price_actual,entry_price_theoretical,rule_followed,entry_time_et")
+        .select("id,date_et,lucid_eod_day,symbol,trade_status,exit_reason,net_pnl_current,net_pnl_optimized,gross_pnl_current,gross_pnl_optimized,theoretical_pnl,actual_pnl,actual_minus_theoretical,entry_price_actual,entry_price_theoretical,rule_followed,entry_time_et,mini_equivalent")
         .order("lucid_eod_day", { ascending: true });
       setTrades((data ?? []) as T[]);
       setLoading(false);
     })();
   }, [user]);
 
-  const cur = useMemo(() => computeStats(trades, "current"), [trades]);
-  const opt = useMemo(() => computeStats(trades, "optimized"), [trades]);
-  const compare = useMemo(() => buildCompare(trades), [trades]);
+  const primary = useMemo(() => computeStats(trades, "current"), [trades]);
+  const gcFree  = useMemo(() => computeStats(trades, "optimized"), [trades]);
   const bySymbol = useMemo(() => bySym(trades), [trades]);
-  const backtest = useMemo(() => backtestVsPaper(trades), [trades]);
-  const equityCur = useMemo(() => equityCurve(trades, "current"), [trades]);
-  const equityOpt = useMemo(() => equityCurve(trades, "optimized"), [trades]);
+  const exec = useMemo(() => execQuality(trades), [trades]);
+  const equityPrim = useMemo(() => equityCurve(trades, "current"), [trades]);
+  const equityGcFree = useMemo(() => equityCurve(trades, "optimized"), [trades]);
+  const dailyPrim = useMemo(() => dailyAgg(trades, "current"), [trades]);
+
+  const gcWatch = useMemo(() => buildWatch(trades, "GC", -3000), [trades]);
+  const mesWatch = useMemo(() => buildWatch(trades, "MES", -2000), [trades]);
+  const ymWatch = useMemo(() => buildWatch(trades, "YM", -2000), [trades]);
+  const hgWatch = useMemo(() => buildWatch(trades, "HG", -2000), [trades]);
 
   if (loading) return <div className="text-sm text-muted-foreground">Ladataan…</div>;
   if (trades.length === 0) {
     return <div className="text-sm text-muted-foreground">Ei treidejä vielä — lisää ensimmäinen Loki-sivulla.</div>;
   }
 
+  const winningDays = dailyPrim.filter((d) => d.pnl >= 250).length;
+  const cycles = Math.floor(winningDays / 5);
+  const eq = equityPrim;
+  const peakEq = eq.reduce((m, p) => Math.max(m, p.equity), 0);
+  const ddNow = (eq.at(-1)?.equity ?? 0) - peakEq;
+  const dailyValues = dailyPrim.map((d) => d.pnl);
+  const worstDay = dailyValues.length ? Math.min(...dailyValues) : 0;
+  const dllSoftLockDays = dailyValues.filter((v) => v <= -3000).length;
+  const mllBreach = ddNow <= -5000;
+
   return (
     <div className="space-y-6">
-      <div className="grid md:grid-cols-2 gap-4">
-        <PortfolioStatsCard title="Current V2" stats={cur} accent="muted" />
-        <PortfolioStatsCard title="Optimized V2" stats={opt} accent="primary" />
+      {/* Top alerts */}
+      <div className="space-y-2">
+        {mllBreach && <Alert tone="destructive">MLL breach estimate: drawdown {fmt$(ddNow)} ≤ −$5,000.</Alert>}
+        {dllSoftLockDays > 0 && <Alert tone="warning">DLL soft-lock: {dllSoftLockDays} päivä(ä) ≤ −$3,000.</Alert>}
+        {gcWatch.alert && <Alert tone="destructive">GC deterioration: rolling 10-trade {fmt$(gcWatch.rolling10)}.</Alert>}
+        {gcWatch.threeStops && <Alert tone="warning">GC: 3 stop exits peräkkäin.</Alert>}
+        {mesWatch.alert && <Alert tone="warning">MES rolling 10-trade {fmt$(mesWatch.rolling10)} — execution leakage.</Alert>}
+        {ymWatch.alert && <Alert tone="warning">YM rolling 10-trade {fmt$(ymWatch.rolling10)}.</Alert>}
+        {exec.actualMinusTheo < -200 && <Alert tone="warning">Execution leakage: actual {fmt$(exec.actualMinusTheo)} vs theoretical.</Alert>}
       </div>
 
+      {/* Portfolio Summary */}
+      <div className="grid md:grid-cols-2 gap-4">
+        <PortfolioStatsCard title="Primary (high-EV, sis. GC)" stats={primary} accent="primary"
+          extras={{ winningDays, cycles, ddNow, worstDay }} />
+        <PortfolioStatsCard title="GC-free (vertailu)" stats={gcFree} accent="muted"
+          extras={{ winningDays: dailyAgg(trades,"optimized").filter(d => d.pnl >= 250).length, cycles: 0, ddNow: 0, worstDay: 0 }} />
+      </div>
+
+      {/* Lucid EV context */}
       <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-base">Portfoliovertailu</CardTitle></CardHeader>
-        <CardContent>
-          <div className="grid sm:grid-cols-3 gap-3 text-sm">
-            <CompareRow label="Total P&L" a={cur.totalNet} b={opt.totalNet} better="high" />
-            <CompareRow label="Max drawdown" a={cur.maxDrawdown} b={opt.maxDrawdown} better="low" />
-            <CompareRow label="Winning days ≥ $250" a={cur.winningDays250} b={opt.winningDays250} better="high" />
-          </div>
-          <div className="mt-3 text-sm font-medium">
-            {compare.winner === "tie"
-              ? "Tasapeli paper-forwardissa tähän mennessä."
-              : `${compare.winner === "current" ? "Current V2" : "Optimized V2"} on parempi paper-forwardissa tähän mennessä.`}
-          </div>
+        <CardHeader className="pb-2"><CardTitle className="text-sm">Lucid EV-context (backtest expectation, not guarantee)</CardTitle></CardHeader>
+        <CardContent className="grid sm:grid-cols-2 gap-1 text-sm">
+          <Row label="Median M18-60 (5 tiliä)" v={LUCID_EV_CONTEXT.monthlyMedian} />
+          <Row label="5Y median net" v={LUCID_EV_CONTEXT.fiveYearMedian} />
+          <Row label="5Y P10 net" v={LUCID_EV_CONTEXT.fiveYearP10} />
+          <Row label="First payout median" v={LUCID_EV_CONTEXT.firstPayoutDays} />
+          <Row label="Breach rate" v={LUCID_EV_CONTEXT.breachRate} />
+          <Row label="Worst modeled day" v={LUCID_EV_CONTEXT.worstDay} />
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="equity">
-        <TabsList className="grid grid-cols-2 sm:grid-cols-4 w-full">
-          <TabsTrigger value="equity">Equity</TabsTrigger>
-          <TabsTrigger value="symbol">Symbol</TabsTrigger>
-          <TabsTrigger value="daily">Daily</TabsTrigger>
+      <Tabs defaultValue="overview">
+        <TabsList className="grid grid-cols-3 sm:grid-cols-6 w-full">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="legs">Per-leg</TabsTrigger>
           <TabsTrigger value="payout">Payout</TabsTrigger>
+          <TabsTrigger value="risk">Risk</TabsTrigger>
+          <TabsTrigger value="exec">Execution</TabsTrigger>
+          <TabsTrigger value="watch">Watch</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="equity" className="space-y-4 mt-4">
+        <TabsContent value="overview" className="space-y-4 mt-4">
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm">Equity curve</CardTitle></CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={mergeEquity(equityCur, equityOpt)}>
+                <LineChart data={mergeEquity(equityPrim, equityGcFree)}>
                   <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                   <XAxis dataKey="day" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(v: number) => `$${v.toFixed(2)}`} />
                   <ReferenceLine y={0} stroke="hsl(var(--border))" />
-                  <Line dataKey="current" name="Current V2" stroke="hsl(var(--muted-foreground))" dot={false} strokeWidth={2} />
-                  <Line dataKey="optimized" name="Optimized V2" stroke="hsl(var(--primary))" dot={false} strokeWidth={2} />
+                  <Line dataKey="primary" name="Primary" stroke="hsl(var(--primary))" dot={false} strokeWidth={2} />
+                  <Line dataKey="gcFree" name="GC-free" stroke="hsl(var(--muted-foreground))" dot={false} strokeWidth={2} />
                 </LineChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
 
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Drawdown — Current vs Optimized</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Drawdown</CardTitle></CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={mergeDD(equityCur, equityOpt)}>
+                <LineChart data={ddSeries(equityPrim)}>
                   <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                   <XAxis dataKey="day" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(v: number) => `$${v.toFixed(2)}`} />
-                  <Line dataKey="current" stroke="hsl(var(--muted-foreground))" dot={false} strokeWidth={2} />
-                  <Line dataKey="optimized" stroke="hsl(var(--destructive))" dot={false} strokeWidth={2} />
+                  <ReferenceLine y={-5000} stroke="hsl(var(--destructive))" strokeDasharray="3 3" label={{ value: "MLL −$5,000", fontSize: 10, fill: "hsl(var(--destructive))" }} />
+                  <Line dataKey="dd" stroke="hsl(var(--destructive))" dot={false} strokeWidth={2} />
                 </LineChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="symbol" className="space-y-4 mt-4">
+        <TabsContent value="legs" className="space-y-4 mt-4">
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm">P&amp;L by symbol</CardTitle></CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={Object.entries(bySymbol).map(([sym, v]) => ({ sym, current: v.totalCur, optimized: v.totalOpt }))}>
+                <BarChart data={SYMBOLS.map((sym) => ({ sym, primary: bySymbol[sym]?.totalCur ?? 0, gcFree: bySymbol[sym]?.totalOpt ?? 0 }))}>
                   <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                   <XAxis dataKey="sym" />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(v: number) => `$${v.toFixed(2)}`} />
-                  <Bar dataKey="current" name="Current" fill="hsl(var(--muted-foreground))" />
-                  <Bar dataKey="optimized" name="Optimized" fill="hsl(var(--primary))" />
+                  <Bar dataKey="primary" name="Primary" fill="hsl(var(--primary))" />
+                  <Bar dataKey="gcFree" name="GC-free" fill="hsl(var(--muted-foreground))" />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
 
-          <div className="grid md:grid-cols-3 gap-3">
-            {(["ES","YM","HG"] as const).map((sym) => {
+          <div className="grid md:grid-cols-2 gap-3">
+            {SYMBOLS.map((sym) => {
               const v = bySymbol[sym] ?? emptySymStat();
+              const spec = STRATEGIES.find((s) => s.symbol === sym)!;
               return (
                 <Card key={sym}>
-                  <CardHeader className="pb-2"><CardTitle className="text-sm font-mono">{sym}</CardTitle></CardHeader>
+                  <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                    <CardTitle className="text-sm font-mono">{sym}</CardTitle>
+                    <Badge variant="outline" className="text-[10px]">×{spec.primaryQty}</Badge>
+                  </CardHeader>
                   <CardContent className="text-sm space-y-1">
-                    <Row label="P&L Current" v={fmt$(v.totalCur)} />
-                    <Row label="P&L Optimized" v={fmt$(v.totalOpt)} />
                     <Row label="Trades" v={String(v.trades)} />
+                    <Row label="Net P&L (Primary)" v={fmt$(v.totalCur)} />
+                    <Row label="Gross P&L" v={fmt$(v.grossCur)} />
                     <Row label="Win rate" v={`${(v.winRate*100).toFixed(1)}%`} />
                     <Row label="Profit factor" v={v.profitFactor.toFixed(2)} />
+                    <Row label="Avg trade" v={fmt$(v.avgTrade)} />
+                    <Row label="Best / Worst" v={`${fmt$(v.best)} / ${fmt$(v.worst)}`} />
+                    <Row label="Max DD" v={fmt$(v.maxDD)} />
+                    <Row label="$250+ days contributed" v={String(v.days250)} />
                     <Row label="Avg slippage ticks" v={v.avgSlipTicks.toFixed(2)} />
-                    <Row label="Avg actual − theo" v={v.avgActualMinusTheo.toFixed(4)} />
+                    <Row label="Actual − theoretical" v={fmt$(v.actualMinusTheo)} />
+                    <Row label="Rule errors" v={String(v.ruleErrors)} />
+                    <Row label="Missed" v={String(v.missed)} />
                     {sym === "HG" && (
                       <>
-                        <Row label="HG 16:30 late entries" v={String(v.lateEntries ?? 0)} />
-                        <Row label="manual_flatten_before_1645" v={String(v.manualFlatten ?? 0)} />
+                        <Row label="HG 16:30 late entries" v={String(v.lateEntries)} />
+                        <Row label="manual_flatten_before_1645" v={String(v.manualFlatten)} />
                       </>
                     )}
                   </CardContent>
@@ -170,55 +218,78 @@ function ResultsPage() {
           </div>
         </TabsContent>
 
-        <TabsContent value="daily" className="space-y-4 mt-4">
+        <TabsContent value="payout" className="space-y-4 mt-4">
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">P&amp;L by day</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Lucid payout tracking</CardTitle></CardHeader>
+            <CardContent className="text-sm space-y-1">
+              <Row label="$250+ winning days" v={String(winningDays)} />
+              <Row label="Estimated payout cycles done" v={String(cycles)} />
+              <Row label="Days until next 5-day cycle" v={String(5 - (winningDays % 5))} />
+              <Row label="Best Lucid EOD day" v={fmt$(Math.max(0, ...dailyValues))} />
+              <Row label="Worst Lucid EOD day" v={fmt$(worstDay)} />
+              <Row label="Days since last $250+" v={String(daysSince(dailyPrim))} />
+              <Row label="Active days (taken)" v={String(dailyPrim.filter(d => d.trades > 0).length)} />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Daily P&amp;L (Primary)</CardTitle></CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={equityCur.map((p, i) => ({ day: p.day, current: p.daily, optimized: equityOpt[i]?.daily ?? 0 }))}>
+                <BarChart data={dailyPrim}>
                   <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                   <XAxis dataKey="day" tick={{ fontSize: 10 }} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(v: number) => `$${v.toFixed(2)}`} />
-                  <Bar dataKey="current" name="Current" fill="hsl(var(--muted-foreground))" />
-                  <Bar dataKey="optimized" name="Optimized" fill="hsl(var(--primary))" />
+                  <ReferenceLine y={250} stroke="hsl(var(--success))" strokeDasharray="3 3" />
+                  <Bar dataKey="pnl" name="P&L" fill="hsl(var(--primary))" />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
-          <DailyTable trades={trades} />
         </TabsContent>
 
-        <TabsContent value="payout" className="space-y-4 mt-4">
+        <TabsContent value="risk" className="space-y-4 mt-4">
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Lucid payout simulation</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Risk / breach tracking</CardTitle></CardHeader>
             <CardContent className="text-sm space-y-1">
-              <Row label="Current — winning days ≥ $250" v={String(cur.winningDays250)} />
-              <Row label="Optimized — winning days ≥ $250" v={String(opt.winningDays250)} />
-              <Row label="Current — payout cycles done" v={String(Math.floor(cur.winningDays250 / 5))} />
-              <Row label="Optimized — payout cycles done" v={String(Math.floor(opt.winningDays250 / 5))} />
-              <Row label="Current — days until next 5-day cycle" v={String(5 - (cur.winningDays250 % 5))} />
-              <Row label="Optimized — days until next 5-day cycle" v={String(5 - (opt.winningDays250 % 5))} />
-              <Row label="Current — best day" v={fmt$(cur.bestDay)} />
-              <Row label="Current — worst day" v={fmt$(cur.worstDay)} />
-              <Row label="Optimized — best day" v={fmt$(opt.bestDay)} />
-              <Row label="Optimized — worst day" v={fmt$(opt.worstDay)} />
+              <Row label="Current equity" v={fmt$(eq.at(-1)?.equity ?? 0)} />
+              <Row label="Peak equity" v={fmt$(peakEq)} />
+              <Row label="Current drawdown" v={fmt$(ddNow)} />
+              <Row label="MLL estimate (≤ −$5,000)" v={mllBreach ? "BREACH" : "OK"} />
+              <Row label="Worst rolling 5-day" v={fmt$(rollingWorst(dailyValues, 5))} />
+              <Row label="Worst rolling 10-day" v={fmt$(rollingWorst(dailyValues, 10))} />
+              <Row label="Days ≤ −$1,000" v={String(dailyValues.filter(v => v <= -1000).length)} />
+              <Row label="Days ≤ −$2,000" v={String(dailyValues.filter(v => v <= -2000).length)} />
+              <Row label="Days ≤ −$3,000" v={String(dailyValues.filter(v => v <= -3000).length)} />
+              <Row label="DLL soft-lock days est. (≤ −$3,000)" v={String(dllSoftLockDays)} />
             </CardContent>
           </Card>
+        </TabsContent>
 
+        <TabsContent value="exec" className="space-y-4 mt-4">
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Backtest vs paper</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Execution quality</CardTitle></CardHeader>
             <CardContent className="text-sm space-y-1">
-              <Row label="Expected/theoretical P&L (Current)" v={fmt$(backtest.expectedCur)} />
-              <Row label="Actual/paper P&L (Current)" v={fmt$(backtest.actualCur)} />
-              <Row label="Actual − expected (Current)" v={fmt$(backtest.actualCur - backtest.expectedCur)} />
-              <Row label="Average slippage ticks" v={backtest.avgSlipTicks.toFixed(2)} />
-              <Row label="Number of missed trades" v={String(backtest.missed)} />
-              <Row label="Number of rule errors" v={String(backtest.ruleErrors)} />
-              <Row label="Number of late entries (HG 16:30)" v={String(backtest.lateEntries)} />
-              <Row label="Manual overrides" v={String(backtest.manualOverrides)} />
+              <Row label="Theoretical P&L" v={fmt$(exec.theoretical)} />
+              <Row label="Actual P&L" v={fmt$(exec.actual)} />
+              <Row label="Actual − theoretical" v={fmt$(exec.actualMinusTheo)} />
+              <Row label="Avg slippage ticks" v={exec.avgSlipTicks.toFixed(2)} />
+              <Row label="Avg slippage $" v={fmt$(exec.avgSlipDollars)} />
+              <Row label="Missed trades" v={String(exec.missed)} />
+              <Row label="Late entries (HG 16:30)" v={String(exec.lateEntries)} />
+              <Row label="Rule errors" v={String(exec.ruleErrors)} />
+              <Row label="Manual overrides (manual_flatten)" v={String(exec.manualOverrides)} />
+              <Row label="Cutoff exits" v={String(exec.manualOverrides)} />
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="watch" className="space-y-4 mt-4">
+          <WatchCard sym="GC" w={gcWatch} note="Korkein EV mutta riskisin jalka. Hälytys jos rolling 10 < −3000 tai 3 stoppia peräkkäin." />
+          <WatchCard sym="MES" w={mesWatch} note="Micro-strategia — validoi paper data huolella. Hälytys jos rolling 10 < −2000." />
+          <WatchCard sym="YM" w={ymWatch} note="02:30 fill-laatu kriittinen. Hälytys jos rolling 10 < −2000." />
+          <WatchCard sym="HG" w={hgWatch} note="16:30 entry → seuraa manual_flatten määrää." />
         </TabsContent>
       </Tabs>
     </div>
@@ -247,19 +318,6 @@ function computeStats(trades: T[], side: "current" | "optimized"): Stats {
   const profitFactor = sumLosses === 0 ? (sumWins > 0 ? Infinity : 0) : sumWins / sumLosses;
   const byDay = groupByDay(taken, side);
   const dayValues = Object.values(byDay);
-  const bestDay = dayValues.length ? Math.max(...dayValues) : 0;
-  const worstDay = dayValues.length ? Math.min(...dayValues) : 0;
-  const winningDays250 = dayValues.filter((v) => v >= 250).length;
-
-  // drawdown
-  let peak = 0, eq = 0, dd = 0;
-  const sorted = [...taken].sort((a, b) => (a.lucid_eod_day ?? "").localeCompare(b.lucid_eod_day ?? ""));
-  for (const t of sorted) {
-    eq += Number(side === "current" ? t.net_pnl_current : t.net_pnl_optimized) || 0;
-    if (eq > peak) peak = eq;
-    dd = Math.min(dd, eq - peak);
-  }
-
   return {
     totalNet, totalGross, trades: taken.length,
     winRate: taken.length ? wins.length / taken.length : 0,
@@ -268,10 +326,22 @@ function computeStats(trades: T[], side: "current" | "optimized"): Stats {
     avgLoss: losses.length ? -sumLosses / losses.length : 0,
     bestTrade: pnls.length ? Math.max(...pnls) : 0,
     worstTrade: pnls.length ? Math.min(...pnls) : 0,
-    bestDay, worstDay,
-    maxDrawdown: dd,
-    winningDays250,
+    bestDay: dayValues.length ? Math.max(...dayValues) : 0,
+    worstDay: dayValues.length ? Math.min(...dayValues) : 0,
+    maxDrawdown: drawdown(taken, side),
+    winningDays250: dayValues.filter((v) => v >= 250).length,
   };
+}
+
+function drawdown(taken: T[], side: "current" | "optimized") {
+  let peak = 0, eq = 0, dd = 0;
+  const sorted = [...taken].sort((a, b) => (a.lucid_eod_day ?? "").localeCompare(b.lucid_eod_day ?? ""));
+  for (const t of sorted) {
+    eq += Number(side === "current" ? t.net_pnl_current : t.net_pnl_optimized) || 0;
+    if (eq > peak) peak = eq;
+    dd = Math.min(dd, eq - peak);
+  }
+  return dd;
 }
 
 function groupByDay(trades: T[], side: "current" | "optimized"): Record<string, number> {
@@ -283,12 +353,27 @@ function groupByDay(trades: T[], side: "current" | "optimized"): Record<string, 
   return out;
 }
 
-function bySym(trades: T[]) {
-  const out: Record<string, ReturnType<typeof emptySymStat>> = {};
-  for (const sym of ["ES","YM","HG"] as const) {
+function dailyAgg(trades: T[], side: "current" | "optimized"): { day: string; pnl: number; trades: number }[] {
+  const map = new Map<string, { pnl: number; trades: number }>();
+  for (const t of trades.filter((x) => x.trade_status === "Taken")) {
+    const k = t.lucid_eod_day ?? t.date_et ?? "—";
+    const e = map.get(k) ?? { pnl: 0, trades: 0 };
+    e.pnl += Number(side === "current" ? t.net_pnl_current : t.net_pnl_optimized) || 0;
+    e.trades += 1;
+    map.set(k, e);
+  }
+  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([day, v]) => ({ day, ...v }));
+}
+
+type SymStat = ReturnType<typeof emptySymStat>;
+function bySym(trades: T[]): Record<Symbol, SymStat> {
+  const out: Partial<Record<Symbol, SymStat>> = {};
+  for (const sym of SYMBOLS) {
     const sub = trades.filter((t) => t.symbol === sym && t.trade_status === "Taken");
+    const all = trades.filter((t) => t.symbol === sym);
     const pnlsC = sub.map((t) => Number(t.net_pnl_current) || 0);
     const pnlsO = sub.map((t) => Number(t.net_pnl_optimized) || 0);
+    const gross = sub.map((t) => Number(t.gross_pnl_current) || 0);
     const wins = pnlsC.filter((p) => p > 0).length;
     const sumW = pnlsC.filter((p) => p > 0).reduce((a, b) => a + b, 0);
     const sumL = Math.abs(pnlsC.filter((p) => p < 0).reduce((a, b) => a + b, 0));
@@ -296,26 +381,44 @@ function bySym(trades: T[]) {
     const slipTicks = sub
       .filter((t) => t.entry_price_actual != null && t.entry_price_theoretical != null)
       .map((t) => Math.abs(Number(t.entry_price_actual) - Number(t.entry_price_theoretical)) / tickSize);
-    const diffs = sub
-      .filter((t) => t.entry_price_actual != null && t.entry_price_theoretical != null)
-      .map((t) => Number(t.entry_price_actual) - Number(t.entry_price_theoretical));
+    const amt = sub
+      .filter((t) => t.actual_minus_theoretical != null)
+      .map((t) => Number(t.actual_minus_theoretical));
+    const days = new Map<string, number>();
+    for (const t of sub) {
+      const k = t.lucid_eod_day ?? t.date_et ?? "—";
+      days.set(k, (days.get(k) ?? 0) + (Number(t.net_pnl_current) || 0));
+    }
     out[sym] = {
       totalCur: pnlsC.reduce((a, b) => a + b, 0),
       totalOpt: pnlsO.reduce((a, b) => a + b, 0),
+      grossCur: gross.reduce((a, b) => a + b, 0),
       trades: sub.length,
       winRate: sub.length ? wins / sub.length : 0,
       profitFactor: sumL === 0 ? (sumW > 0 ? 99 : 0) : sumW / sumL,
+      avgTrade: sub.length ? pnlsC.reduce((a, b) => a + b, 0) / sub.length : 0,
+      best: pnlsC.length ? Math.max(...pnlsC) : 0,
+      worst: pnlsC.length ? Math.min(...pnlsC) : 0,
+      maxDD: drawdown(sub, "current"),
+      days250: [...days.values()].filter((v) => v >= 250).length,
       avgSlipTicks: slipTicks.length ? slipTicks.reduce((a, b) => a + b, 0) / slipTicks.length : 0,
-      avgActualMinusTheo: diffs.length ? diffs.reduce((a, b) => a + b, 0) / diffs.length : 0,
-      lateEntries: sym === "HG" ? trades.filter((t) => t.symbol === "HG" && t.entry_time_et === "16:30").length : 0,
-      manualFlatten: sym === "HG" ? trades.filter((t) => t.symbol === "HG" && t.exit_reason === "manual_flatten_before_1645").length : 0,
+      actualMinusTheo: amt.length ? amt.reduce((a, b) => a + b, 0) : 0,
+      ruleErrors: all.filter((t) => t.rule_followed === false).length,
+      missed: all.filter((t) => t.trade_status === "Missed").length,
+      lateEntries: sym === "HG" ? all.filter((t) => t.entry_time_et === "16:30").length : 0,
+      manualFlatten: sym === "HG" ? all.filter((t) => t.exit_reason === "manual_flatten_before_1645").length : 0,
     };
   }
-  return out;
+  return out as Record<Symbol, SymStat>;
 }
 
 function emptySymStat() {
-  return { totalCur: 0, totalOpt: 0, trades: 0, winRate: 0, profitFactor: 0, avgSlipTicks: 0, avgActualMinusTheo: 0, lateEntries: 0, manualFlatten: 0 };
+  return {
+    totalCur: 0, totalOpt: 0, grossCur: 0, trades: 0, winRate: 0, profitFactor: 0,
+    avgTrade: 0, best: 0, worst: 0, maxDD: 0, days250: 0,
+    avgSlipTicks: 0, actualMinusTheo: 0, ruleErrors: 0, missed: 0,
+    lateEntries: 0, manualFlatten: 0,
+  };
 }
 
 function equityCurve(trades: T[], side: "current" | "optimized") {
@@ -329,52 +432,41 @@ function equityCurve(trades: T[], side: "current" | "optimized") {
 }
 
 function mergeEquity(a: { day: string; equity: number }[], b: { day: string; equity: number }[]) {
-  const map = new Map<string, { day: string; current?: number; optimized?: number }>();
-  for (const x of a) map.set(x.day, { day: x.day, current: x.equity });
+  const map = new Map<string, { day: string; primary?: number; gcFree?: number }>();
+  for (const x of a) map.set(x.day, { day: x.day, primary: x.equity });
   for (const x of b) {
     const e = map.get(x.day) ?? { day: x.day };
-    e.optimized = x.equity;
+    e.gcFree = x.equity;
     map.set(x.day, e);
   }
   return [...map.values()].sort((x, y) => x.day.localeCompare(y.day));
 }
 
-function mergeDD(a: { day: string; equity: number }[], b: { day: string; equity: number }[]) {
-  const ddSeries = (xs: { day: string; equity: number }[]) => {
-    let peak = 0;
-    return xs.map((p) => { peak = Math.max(peak, p.equity); return { day: p.day, dd: p.equity - peak }; });
-  };
-  const da = ddSeries(a), db = ddSeries(b);
-  const map = new Map<string, { day: string; current?: number; optimized?: number }>();
-  for (const x of da) map.set(x.day, { day: x.day, current: x.dd });
-  for (const x of db) {
-    const e = map.get(x.day) ?? { day: x.day };
-    e.optimized = x.dd;
-    map.set(x.day, e);
-  }
-  return [...map.values()].sort((x, y) => x.day.localeCompare(y.day));
+function ddSeries(eq: { day: string; equity: number }[]) {
+  let peak = 0;
+  return eq.map((p) => { peak = Math.max(peak, p.equity); return { day: p.day, dd: p.equity - peak }; });
 }
 
-function buildCompare(trades: T[]) {
-  const c = computeStats(trades, "current").totalNet;
-  const o = computeStats(trades, "optimized").totalNet;
-  return { winner: c === o ? "tie" : c > o ? "current" : "optimized" };
-}
-
-function backtestVsPaper(trades: T[]) {
+function execQuality(trades: T[]) {
   const taken = trades.filter((t) => t.trade_status === "Taken");
-  const expectedCur = taken.reduce((a, t) => a + (Number(t.gross_pnl_current) || 0), 0);
-  const actualCur = taken.reduce((a, t) => a + (Number(t.net_pnl_current) || 0), 0);
+  const theoretical = taken.reduce((a, t) => a + (Number(t.theoretical_pnl) || 0), 0);
+  const actual = taken.reduce((a, t) => a + (Number(t.actual_pnl ?? t.net_pnl_current) || 0), 0);
   const slipTicks: number[] = [];
+  const slipDollars: number[] = [];
   for (const t of taken) {
     if (t.entry_price_actual != null && t.entry_price_theoretical != null) {
-      const tickSize = TICK[t.symbol as keyof typeof TICK]?.size ?? 1;
-      slipTicks.push(Math.abs(Number(t.entry_price_actual) - Number(t.entry_price_theoretical)) / tickSize);
+      const tickSize = TICK[t.symbol as Symbol]?.size ?? 1;
+      const tickValue = TICK[t.symbol as Symbol]?.value ?? 0;
+      const ticks = Math.abs(Number(t.entry_price_actual) - Number(t.entry_price_theoretical)) / tickSize;
+      slipTicks.push(ticks);
+      slipDollars.push(ticks * tickValue);
     }
   }
   return {
-    expectedCur, actualCur,
+    theoretical, actual,
+    actualMinusTheo: actual - theoretical,
     avgSlipTicks: slipTicks.length ? slipTicks.reduce((a, b) => a + b, 0) / slipTicks.length : 0,
+    avgSlipDollars: slipDollars.length ? slipDollars.reduce((a, b) => a + b, 0) / slipDollars.length : 0,
     missed: trades.filter((t) => t.trade_status === "Missed").length,
     ruleErrors: trades.filter((t) => t.rule_followed === false).length,
     lateEntries: trades.filter((t) => t.symbol === "HG" && t.entry_time_et === "16:30").length,
@@ -382,20 +474,54 @@ function backtestVsPaper(trades: T[]) {
   };
 }
 
-function CompareRow({ label, a, b, better }: { label: string; a: number; b: number; better: "high" | "low" }) {
-  const aBetter = better === "high" ? a > b : a < b;
-  return (
-    <div className="rounded-md border bg-secondary/30 p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="grid grid-cols-2 gap-2 mt-1 text-sm tabular-nums">
-        <div className={aBetter ? "font-semibold text-success" : ""}>C: {fmt$(a)}</div>
-        <div className={!aBetter && a !== b ? "font-semibold text-success" : ""}>O: {fmt$(b)}</div>
-      </div>
-    </div>
-  );
+function buildWatch(trades: T[], sym: Symbol, threshold: number) {
+  const sub = trades
+    .filter((t) => t.symbol === sym && t.trade_status === "Taken")
+    .sort((a, b) => (a.lucid_eod_day ?? "").localeCompare(b.lucid_eod_day ?? ""));
+  const pnls = sub.map((t) => Number(t.net_pnl_current) || 0);
+  const rolling10 = pnls.slice(-10).reduce((a, b) => a + b, 0);
+  const rolling5 = pnls.slice(-5).reduce((a, b) => a + b, 0);
+  const total = pnls.reduce((a, b) => a + b, 0);
+  // streak of stops
+  let streak = 0;
+  for (let i = sub.length - 1; i >= 0; i--) {
+    if (sub[i].exit_reason === "stop") streak++;
+    else break;
+  }
+  return {
+    rolling5, rolling10, total, threshold,
+    threeStops: streak >= 3,
+    alert: rolling10 < threshold || total < threshold,
+    trades: sub.length,
+    streak,
+  };
 }
 
-function PortfolioStatsCard({ title, stats, accent }: { title: string; stats: Stats; accent: "primary" | "muted" }) {
+function rollingWorst(values: number[], window: number) {
+  if (values.length < 1) return 0;
+  let worst = 0;
+  for (let i = 0; i + window <= values.length; i++) {
+    const sum = values.slice(i, i + window).reduce((a, b) => a + b, 0);
+    if (sum < worst) worst = sum;
+  }
+  return worst;
+}
+
+function daysSince(daily: { day: string; pnl: number }[]) {
+  for (let i = daily.length - 1, n = 0; i >= 0; i--, n++) {
+    if (daily[i].pnl >= 250) return n;
+  }
+  return daily.length;
+}
+
+function PortfolioStatsCard({
+  title, stats, accent, extras,
+}: {
+  title: string;
+  stats: Stats;
+  accent: "primary" | "muted";
+  extras: { winningDays: number; cycles: number; ddNow: number; worstDay: number };
+}) {
   return (
     <Card className={accent === "primary" ? "border-primary/40" : ""}>
       <CardHeader className="pb-2 flex flex-row items-center justify-between">
@@ -403,7 +529,7 @@ function PortfolioStatsCard({ title, stats, accent }: { title: string; stats: St
         <Badge variant={accent === "primary" ? "default" : "secondary"}>{stats.trades} treidiä</Badge>
       </CardHeader>
       <CardContent>
-        <div className="text-3xl font-bold tabular-nums mb-3" style={{ color: stats.totalNet >= 0 ? "var(--success)" : "var(--destructive)" }}>
+        <div className={`text-3xl font-bold tabular-nums mb-3 ${stats.totalNet >= 0 ? "text-success" : "text-destructive"}`}>
           {fmt$(stats.totalNet)}
         </div>
         <div className="grid grid-cols-2 gap-y-1 gap-x-4 text-sm">
@@ -417,75 +543,52 @@ function PortfolioStatsCard({ title, stats, accent }: { title: string; stats: St
           <Row label="Best day" v={fmt$(stats.bestDay)} />
           <Row label="Worst day" v={fmt$(stats.worstDay)} />
           <Row label="Max drawdown" v={fmt$(stats.maxDrawdown)} />
-          <Row label="Winning days ≥ $250" v={String(stats.winningDays250)} />
-          <Row label="Payout cycles done" v={String(Math.floor(stats.winningDays250 / 5))} />
+          <Row label="$250+ days" v={String(extras.winningDays)} />
+          <Row label="Payout cycles" v={String(extras.cycles)} />
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function WatchCard({ sym, w, note }: { sym: Symbol; w: ReturnType<typeof buildWatch>; note: string }) {
+  return (
+    <Card className={w.alert ? "border-destructive/50" : ""}>
+      <CardHeader className="pb-2 flex flex-row items-center justify-between">
+        <CardTitle className="text-sm font-mono">{sym} watch</CardTitle>
+        {w.alert ? <Badge variant="destructive">ALERT</Badge> : <Badge variant="secondary">OK</Badge>}
+      </CardHeader>
+      <CardContent className="text-sm space-y-1">
+        <div className="text-xs text-muted-foreground mb-2">{note}</div>
+        <Row label="Trades" v={String(w.trades)} />
+        <Row label="Total net" v={fmt$(w.total)} />
+        <Row label="Rolling 5-trade" v={fmt$(w.rolling5)} />
+        <Row label="Rolling 10-trade" v={fmt$(w.rolling10)} />
+        <Row label="Stop streak (current)" v={String(w.streak)} />
+        <Row label="Threshold" v={fmt$(w.threshold)} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function Alert({ tone, children }: { tone: "destructive" | "warning"; children: React.ReactNode }) {
+  const cls = tone === "destructive"
+    ? "bg-destructive/10 border-destructive/40 text-destructive"
+    : "bg-warning/10 border-warning/40 text-foreground";
+  return (
+    <div className={`flex gap-2 items-start text-sm rounded-md border px-3 py-2 ${cls}`}>
+      <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+      <span>{children}</span>
+    </div>
   );
 }
 
 function Row({ label, v }: { label: string; v: string }) {
   return (
-    <>
+    <div className="flex justify-between gap-3 text-sm">
       <div className="text-muted-foreground">{label}</div>
       <div className="text-right tabular-nums font-medium">{v}</div>
-    </>
-  );
-}
-
-function DailyTable({ trades }: { trades: T[] }) {
-  const days = useMemo(() => {
-    const map = new Map<string, { current: number; optimized: number; ES: number; YM: number; HG: number }>();
-    for (const t of trades.filter((x) => x.trade_status === "Taken")) {
-      const k = t.lucid_eod_day ?? t.date_et ?? "—";
-      const e = map.get(k) ?? { current: 0, optimized: 0, ES: 0, YM: 0, HG: 0 };
-      e.current += Number(t.net_pnl_current) || 0;
-      e.optimized += Number(t.net_pnl_optimized) || 0;
-      const sym = t.symbol as "ES" | "YM" | "HG";
-      e[sym] = (e[sym] ?? 0) + (Number(t.net_pnl_current) || 0);
-      map.set(k, e);
-    }
-    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [trades]);
-
-  return (
-    <Card>
-      <CardHeader className="pb-2"><CardTitle className="text-sm">Daily stats</CardTitle></CardHeader>
-      <CardContent className="p-0">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
-              <tr>
-                <th className="text-left px-3 py-2">Lucid EOD</th>
-                <th className="text-right px-3 py-2">Current</th>
-                <th className="text-right px-3 py-2">Optimized</th>
-                <th className="text-center px-3 py-2">≥$250 C/O</th>
-                <th className="text-right px-3 py-2">ES</th>
-                <th className="text-right px-3 py-2">YM</th>
-                <th className="text-right px-3 py-2">HG</th>
-              </tr>
-            </thead>
-            <tbody>
-              {days.map(([day, v]) => (
-                <tr key={day} className="border-t">
-                  <td className="px-3 py-2">{day}</td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${v.current >= 0 ? "text-success" : "text-destructive"}`}>{fmt$(v.current)}</td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${v.optimized >= 0 ? "text-success" : "text-destructive"}`}>{fmt$(v.optimized)}</td>
-                  <td className="px-3 py-2 text-center">
-                    {v.current >= 250 ? <Badge className="bg-success text-success-foreground hover:bg-success">C</Badge> : null}
-                    {v.optimized >= 250 ? <Badge className="bg-success text-success-foreground hover:bg-success ml-1">O</Badge> : null}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fmt$(v.ES)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fmt$(v.YM)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{fmt$(v.HG)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </CardContent>
-    </Card>
+    </div>
   );
 }
 
