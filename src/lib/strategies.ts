@@ -1,11 +1,12 @@
 // LucidDirect capacity_rank1_gc portfolio — DO NOT modify strategy parameters.
-export type Symbol = "YM" | "HG" | "MES" | "GC";
+export type Symbol = "YM" | "HG" | "MES" | "GC" | "MGC";
 
 export const TICK = {
   YM:  { size: 1,      value: 5.0  },
   HG:  { size: 0.0005, value: 12.5 },
   MES: { size: 0.25,   value: 1.25 },
   GC:  { size: 0.10,   value: 10.0 },
+  MGC: { size: 0.10,   value: 1.0  },
 } as const;
 
 // Primary high-EV portfolio (with GC) and GC-free conservative comparison.
@@ -13,8 +14,8 @@ export const TICK = {
 //   current   = Primary (with GC)
 //   optimized = GC-free comparison
 export const PORTFOLIO = {
-  primary: { YM: 4, HG: 5, MES: 20, GC: 4 },
-  gcFree:  { YM: 9, HG: 2, MES: 10, GC: 0 },
+  primary: { YM: 4, HG: 5, MES: 20, GC: 4, MGC: 0 },
+  gcFree:  { YM: 9, HG: 2, MES: 10, GC: 0, MGC: 0 },
 } as const;
 
 // Mini-equivalent per contract (Lucid 10 mini / 100 micro concurrent rule)
@@ -23,6 +24,7 @@ export const MINI_EQ_PER_CONTRACT: Record<Symbol, number> = {
   HG:  1,    // 1 HG mini = 1 mini-eq
   MES: 0.1,  // 10 micros = 1 mini-eq
   GC:  1,    // 1 GC mini = 1 mini-eq
+  MGC: 0.1,  // 10 micros = 1 mini-eq
 };
 
 export const MAX_CONCURRENT_MINI_EQ = 10;
@@ -211,6 +213,44 @@ export const STRATEGIES: StrategySpec[] = [
       "Stop 48 tickiä, target 120 tickiä, pidä enintään 4 kynttilää.",
       "Sulje viimeistään 05:00 ET.",
       "Tiistai−perjantai (ei maanantaisin).",
+    ],
+  }),
+  mk({
+    id: "MGC_imbalance_reversal_europe_x10",
+    symbol: "MGC",
+    name: "MGC_imbalance_reversal_europe_x10",
+    logic: "Etsi Eurooppa-session aikana iso 15 min kynttilä ja treidaa seuraavan kynttilän openissa vastakkaiseen suuntaan.",
+    days: "Tiistai−perjantai (ei maanantaisin)",
+    noMonday: true,
+    sessionName: "Europe / Globex",
+    sessionStartEt: "02:00",
+    sessionEndEt: "04:45",
+    etWindow: "02:00–04:45 ET",
+    helsinkiWindowNormal: "09:00–11:45 (entry-ikkuna)",
+    helsinkiWindowDst: "08:00–10:45 (entry-ikkuna)",
+    entryTimeEt: "next-bar open",
+    possibleEntryTimesEt: [
+      "02:15","02:30","02:45","03:00",
+      "03:15","03:30","03:45","04:00",
+      "04:15","04:30","04:45",
+    ],
+    stopTicks: 24,
+    targetTicks: 120,
+    stopPriceDistance: 2.4,
+    targetPriceDistance: 12.0,
+    maxHoldBars: 2,
+    primaryQty: 10,
+    gcFreeQty: 0,
+    notes: [
+      "Session 02:00–04:45 ET. Etsi iso 15 min kynttilä, joka täyttää molemmat ehdot.",
+      "Body %: |sulkemishinta − avaushinta| / avaushinta × 100 ≥ 0.35%.",
+      "Body fraction: |sulkemishinta − avaushinta| / (korkein − matalin) ≥ 0.55.",
+      "Jos korkein = matalin, signaalia ei oteta.",
+      "Vihreä signaalikynttilä (close > open) → short seuraavan kynttilän avauksessa.",
+      "Punainen signaalikynttilä (close < open) → long seuraavan kynttilän avauksessa.",
+      "Stop 24 tickiä = 2.40 gold-pistettä. Target 120 tickiä = 12.00 gold-pistettä.",
+      "Pidä enintään 2 kynttilää (noin 30 min). Jos stop tai target ei osu, sulje max hold -ajan lopussa.",
+      "Tiistai−perjantai (ei maanantaisin). Max 1 treidi per päivä.",
     ],
   }),
 ];
