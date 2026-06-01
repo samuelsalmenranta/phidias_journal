@@ -1,11 +1,12 @@
 // LucidDirect capacity_rank1_gc portfolio — DO NOT modify strategy parameters.
-export type Symbol = "YM" | "HG" | "MES" | "GC";
+export type Symbol = "YM" | "HG" | "MES" | "GC" | "MGC";
 
 export const TICK = {
   YM:  { size: 1,      value: 5.0  },
   HG:  { size: 0.0005, value: 12.5 },
   MES: { size: 0.25,   value: 1.25 },
   GC:  { size: 0.10,   value: 10.0 },
+  MGC: { size: 0.10,   value: 1.0  },
 } as const;
 
 // Primary high-EV portfolio (with GC) and GC-free conservative comparison.
@@ -13,8 +14,8 @@ export const TICK = {
 //   current   = Primary (with GC)
 //   optimized = GC-free comparison
 export const PORTFOLIO = {
-  primary: { YM: 4, HG: 5, MES: 20, GC: 4 },
-  gcFree:  { YM: 9, HG: 2, MES: 10, GC: 0 },
+  primary: { YM: 4, HG: 5, MES: 20, GC: 4, MGC: 0 },
+  gcFree:  { YM: 9, HG: 2, MES: 10, GC: 0, MGC: 0 },
 } as const;
 
 // Mini-equivalent per contract (Lucid 10 mini / 100 micro concurrent rule)
@@ -23,6 +24,7 @@ export const MINI_EQ_PER_CONTRACT: Record<Symbol, number> = {
   HG:  1,    // 1 HG mini = 1 mini-eq
   MES: 0.1,  // 10 micros = 1 mini-eq
   GC:  1,    // 1 GC mini = 1 mini-eq
+  MGC: 0.1,  // 10 micros = 1 mini-eq
 };
 
 export const MAX_CONCURRENT_MINI_EQ = 10;
