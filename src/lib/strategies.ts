@@ -98,7 +98,7 @@ export const STRATEGIES: StrategySpec[] = [
     notes: [
       "Edellinen päivä punainen: eilen 16:45 ET hinta oli ALLE eilen 09:30 ET hinnan.",
       "Laske gap: (tänään 09:30 ET hinta − eilen 16:45 ET hinta) / eilen 16:45 ET hinta × 100.",
-      "Gap oltava yli +0.7% tai alle −0.7%.",
+      "Gap oltava yli +0.7% tai alle −0.7%. Gap noin 30p.",
       "Vahvistus: katso 09:30−09:45 ET kynttilä. Gap ylös → kynttilän pitää sulkeutua vihreänä. Gap alas → kynttilän pitää sulkeutua punaisena.",
       "Entry: 09:45 ET kynttilän avautuessa.",
       "Stop 24 tickiä, target 72 tickiä, pidä enintään 4 kynttilää.",
@@ -136,7 +136,7 @@ export const STRATEGIES: StrategySpec[] = [
       "Sulje viimeistään 16:45 ET. Jos 16:30 ET entry on auki klo 16:43, sulje manuaalisesti.",
     notes: [
       "Sessio alkaa 13:30 ET. Odota 2 kynttilää — älä katso signaalia ennen 14:00 ET.",
-      "Etsi iso kynttilä: (|sulkemishinta − avaushinta|) / avaushinta × 100 oltava yli 0.5%.",
+      "Etsi iso kynttilä: (|sulkemishinta − avaushinta|) / avaushinta × 100 oltava yli 0.5%. Noin 0.030 pistettä.",
       "Lisäksi: kynttilän body oltava yli 55% koko kynttilän pituudesta (eli lyhyet hännät).",
       "Iso vihreä kynttilä (nousu) → myy seuraavan kynttilän avauksessa.",
       "Iso punainen kynttilä (lasku) → osta seuraavan kynttilän avauksessa.",
@@ -208,7 +208,7 @@ export const STRATEGIES: StrategySpec[] = [
     notes: [
       "Edellinen päivä punainen: eilen 16:45 ET hinta oli ALLE eilen 02:00 ET hinnan.",
       "Laske gap: (tänään 02:00 ET hinta − eilen 16:45 ET hinta) / eilen 16:45 ET hinta × 100.",
-      "Gap oltava yli +0.7% tai alle −0.7%.",
+      "Gap oltava yli +0.7% tai alle −0.7%. noin 300p.",
       "Gap ylös → myy, gap alas → osta (ei vahvistuskynttilää).",
       "Entry: 02:30 ET kynttilän avautuessa.",
       "Stop 24 pistettä, target 72 pistettä, pidä enintään 4 kynttilää.",
