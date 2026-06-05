@@ -136,7 +136,7 @@ export const STRATEGIES: StrategySpec[] = [
       "Sulje viimeistään 16:45 ET. Jos 16:30 ET entry on auki klo 16:43, sulje manuaalisesti.",
     notes: [
       "Sessio alkaa 13:30 ET. Odota 2 kynttilää — älä katso signaalia ennen 14:00 ET.",
-      "Etsi iso kynttilä: (|sulkemishinta − avaushinta|) / avaushinta × 100 oltava yli 0.5%. Noin 0.030 pistettä.",
+      "Etsi iso kynttilä: (|sulkemishinta − avaushinta|) / avaushinta × 100 oltava yli 0.5%. Noin 175 pistettä.",
       "Lisäksi: kynttilän body oltava yli 55% koko kynttilän pituudesta (eli lyhyet hännät).",
       "Iso vihreä kynttilä (nousu) → myy seuraavan kynttilän avauksessa.",
       "Iso punainen kynttilä (lasku) → osta seuraavan kynttilän avauksessa.",
