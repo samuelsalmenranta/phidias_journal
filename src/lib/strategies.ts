@@ -173,7 +173,7 @@ export const STRATEGIES: StrategySpec[] = [
     gcFreeQty: 0,
     notes: [
       "Session 02:00–04:45 ET. Etsi iso 15 min kynttilä, joka täyttää molemmat ehdot.",
-      "Body %: |sulkemishinta − avaushinta| / avaushinta × 100 ≥ 0.35%.",
+      "Body %: |sulkemishinta − avaushinta| / avaushinta × 100 ≥ 0.35%. liike yli 15p+",
       "Body fraction: |sulkemishinta − avaushinta| / (korkein − matalin) ≥ 0.55.",
       "Jos korkein = matalin, signaalia ei oteta.",
       "Vihreä signaalikynttilä (close > open) → short seuraavan kynttilän avauksessa.",
@@ -281,7 +281,7 @@ export const STRATEGIES: StrategySpec[] = [
     gcFreeQty: 0,
     notes: [
       "Session 02:00–04:45 ET. Etsi iso 15 min kynttilä, joka täyttää molemmat ehdot.",
-      "Body %: |sulkemishinta − avaushinta| / avaushinta × 100 ≥ 0.35%.",
+      "Body %: |sulkemishinta − avaushinta| / avaushinta × 100 ≥ 0.35%. liike yli 15p+",
       "Body fraction: |sulkemishinta − avaushinta| / (korkein − matalin) ≥ 0.55.",
       "Jos korkein = matalin, signaalia ei oteta.",
       "Vihreä signaalikynttilä (close > open) → short seuraavan kynttilän avauksessa.",
