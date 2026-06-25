@@ -1,9 +1,10 @@
 import { createFileRoute, Outlet, Link, useRouterState, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { LogOut, BookOpen, ListChecks, BarChart3 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
+import { PORTFOLIO_NAME, PORTFOLIO_SUBTITLE } from "@/lib/strategies";
 
 export const Route = createFileRoute("/_authenticated")({
   component: AuthLayout,
@@ -38,10 +39,10 @@ function AuthLayout() {
       <header className="sticky top-0 z-30 border-b bg-card/95 backdrop-blur">
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <div className="h-7 w-7 rounded-md bg-primary text-primary-foreground grid place-items-center text-xs font-bold">L2</div>
+            <div className="h-7 w-7 rounded-md bg-primary text-primary-foreground grid place-items-center text-xs font-bold">Φ</div>
             <div className="leading-tight">
-              <div className="text-sm font-semibold">LucidDirect V2</div>
-              <div className="text-[10px] text-muted-foreground hidden sm:block">Paper Forward Journal</div>
+              <div className="text-sm font-semibold">{PORTFOLIO_NAME}</div>
+              <div className="text-[10px] text-muted-foreground hidden sm:block">{PORTFOLIO_SUBTITLE}</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -51,7 +52,6 @@ function AuthLayout() {
             </Button>
           </div>
         </div>
-        {/* desktop tabs */}
         <nav className="hidden md:flex max-w-6xl mx-auto px-4 gap-1 border-t">
           {tabs.map((t) => {
             const active = path.startsWith(t.to);
@@ -74,7 +74,6 @@ function AuthLayout() {
         </div>
       </main>
 
-      {/* mobile bottom nav */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 border-t bg-card grid grid-cols-3">
         {tabs.map((t) => {
           const active = path.startsWith(t.to);

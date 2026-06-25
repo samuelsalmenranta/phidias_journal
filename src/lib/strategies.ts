@@ -1,366 +1,541 @@
-// LucidDirect capacity_rank1_gc portfolio — DO NOT modify strategy parameters.
-export type Symbol = "YM" | "HG" | "MES" | "GC" | "MGC";
+// Phidias Risk Bounded portfolio — paper-shadow journal data layer.
+// Replaces the abandoned LucidDirect / capacity_rank1_gc set.
 
-export const TICK = {
-  YM:  { size: 1,      value: 5.0  },
-  HG:  { size: 0.0005, value: 12.5 },
-  MES: { size: 0.25,   value: 1.25 },
-  GC:  { size: 0.10,   value: 10.0 },
-  MGC: { size: 0.10,   value: 1.0  },
-} as const;
+export type Symbol = "MNQ" | "GC" | "NG";
+export type Family =
+  | "prior_day_range_fade"
+  | "prior_day_range_breakout"
+  | "prior_day_close_reversion"
+  | "overnight_range_breakout"
+  | "camarilla_breakout";
 
-// Primary high-EV portfolio (with GC) and GC-free conservative comparison.
-// We re-use the existing "current"/"optimized" DB columns:
-//   current   = Primary (with GC)
-//   optimized = GC-free comparison
-export const PORTFOLIO = {
-  primary: { YM: 4, HG: 5, MES: 20, GC: 4, MGC: 0 },
-  gcFree:  { YM: 9, HG: 2, MES: 10, GC: 0, MGC: 0 },
-} as const;
+export type Phase = "paper_shadow" | "evaluation" | "funded";
+export type AccountStructure =
+  | "1x100K"
+  | "1x150K"
+  | "2x150K+1x100K"
+  | "5x100K";
 
-// Mini-equivalent per contract (Lucid 10 mini / 100 micro concurrent rule)
-export const MINI_EQ_PER_CONTRACT: Record<Symbol, number> = {
-  YM:  1,    // 1 mini = 1 mini-eq
-  HG:  1,    // 1 HG mini = 1 mini-eq
-  MES: 0.1,  // 10 micros = 1 mini-eq
-  GC:  1,    // 1 GC mini = 1 mini-eq
-  MGC: 0.1,  // 10 micros = 1 mini-eq
+export const DEFAULT_ACCOUNT_STRUCTURE: AccountStructure = "2x150K+1x100K";
+
+export const PORTFOLIO_ID = "phidias_risk_bounded";
+export const PORTFOLIO_NAME = "Phidias Risk Bounded";
+export const PORTFOLIO_SUBTITLE = "Paper Shadow Journal";
+export const PORTFOLIO_STATUS = "PAPER_SHADOW_READY";
+
+// ---- Symbol specs --------------------------------------------------------
+
+export interface SymbolSpec {
+  size: number;        // tick size
+  value: number;       // $ per tick per contract
+  commission: number;  // $ per side per contract
+}
+
+export const TICK: Record<Symbol, SymbolSpec> = {
+  MNQ: { size: 0.25,  value: 0.50, commission: 0.79 },
+  GC:  { size: 0.10,  value: 10.0, commission: 2.42 },
+  NG:  { size: 0.001, value: 10.0, commission: 2.32 },
 };
 
-export const MAX_CONCURRENT_MINI_EQ = 10;
+// ---- Phidias account rules ----------------------------------------------
+
+export const PHIDIAS_RULES = {
+  evalTarget: { "100K": 6000, "150K": 9000 },
+  drawdown:   { "100K": 3000, "150K": 4500 },
+  evaluationConsistency: 0.50,
+  fundedConsistency: 0.30,
+  payoutIntervalDays: 5,
+  payoutSplits: [0.75, 0.80, 0.85, 0.90, 1.00],
+  hardFlatEt: "16:45",
+  fundedDrawdownNote: "EOD trailing drawdown (ei intraday). Ei DLL.",
+};
+
+export const ACCOUNT_STRUCTURES: {
+  id: AccountStructure;
+  label: string;
+  accounts: { size: "100K" | "150K"; count: number }[];
+  totalDrawdown: number;
+  totalEvalTarget: number;
+}[] = [
+  { id: "1x100K", label: "1 × Premium 100K",
+    accounts: [{ size: "100K", count: 1 }],
+    totalDrawdown: 3000, totalEvalTarget: 6000 },
+  { id: "1x150K", label: "1 × Premium 150K",
+    accounts: [{ size: "150K", count: 1 }],
+    totalDrawdown: 4500, totalEvalTarget: 9000 },
+  { id: "2x150K+1x100K", label: "2 × 150K + 1 × 100K (default)",
+    accounts: [{ size: "150K", count: 2 }, { size: "100K", count: 1 }],
+    totalDrawdown: 4500 * 2 + 3000, totalEvalTarget: 9000 * 2 + 6000 },
+  { id: "5x100K", label: "5 × Premium 100K",
+    accounts: [{ size: "100K", count: 5 }],
+    totalDrawdown: 3000 * 5, totalEvalTarget: 6000 * 5 },
+];
+
+export const EXPECTED_RETURNS = {
+  realisticMonthly: "€1,400 – €2,500 / kk",
+  fullHistoryMedian: "€2,476 / kk",
+  p10: "€530 / kk",
+  p90: "€4,990 / kk",
+  holdout: "€3,145 / kk",
+  warning:
+    "Täyden historian mediaani sisältää 2022 korkean volatiliteetin jakson. Älä ankkuroidu pelkkään holdoutiin tai täysmediaaniin.",
+  volRegime: {
+    low: "€1,523 / kk",
+    mid: "€825 / kk",
+    high: "€5,294 / kk",
+  },
+  volatilityMessage:
+    "Tämä portfolio on long volatility. Hiljaiset matalan volatiliteetin jaksot ovat odotettuja eivätkä automaattisesti epäonnistuminen.",
+  disclaimer: "Backtest / lifecycle -konteksti — ei takuu tulevasta tuotosta.",
+};
+
+// ---- Strategies ----------------------------------------------------------
 
 export interface StrategySpec {
-  id: string;
+  id: string;                  // short id, e.g. "2828f5a"
+  fullId: string;              // human-readable full id
   symbol: Symbol;
-  name: string;
-  logic: string;
-  days: string;
-  noMonday: boolean;
-  sessionName: string;
-  sessionStartEt: string;
-  sessionEndEt: string;
-  etWindow: string;
-  helsinkiWindowNormal: string;
-  helsinkiWindowDst: string;
-  entryTimeEt: string;
-  possibleEntryTimesEt: string[]; // empty = single fixed entry
-  stopTicks: number;
-  targetTicks: number;
-  stopPriceDistance: number;
-  targetPriceDistance: number;
-  maxHoldBars: number;
-  primaryQty: number;
-  gcFreeQty: number;
-  miniEqPerContract: number;
-  primaryMiniEq: number;
-  gcFreeMiniEq: number;
-  notes: string[];
+  family: Family;
+  qty: number;
+  timeframe: string;           // "15m"
+  timeframeMinutes: number;
+  sessionName: string;         // e.g. "Premarket"
+  sessionStartEt: string;      // "05:00"
+  sessionEndEt: string;        // "09:30"
+  helsinkiNormal: string;
+  helsinkiDst: string;
+  possibleEntryEt: string;     // descriptive
+  atrPeriod: number;
+  thresholdMultiple: number;   // 0.25 typically
+  stopMultiple: number;        // 1.5
+  targetMultiple: number;      // 3.0
+  maxHoldMinutes: number;
+  isFade: boolean;             // affects signal direction
+  description: string;
   warning?: string;
+  killRule: { rolling10Alert: number; hardKillNet: number; losingStreak: number };
 }
 
-function mk(
-  partial: Omit<StrategySpec, "primaryMiniEq" | "gcFreeMiniEq" | "miniEqPerContract">,
-): StrategySpec {
-  const m = MINI_EQ_PER_CONTRACT[partial.symbol];
-  return {
-    ...partial,
-    miniEqPerContract: m,
-    primaryMiniEq: partial.primaryQty * m,
-    gcFreeMiniEq: partial.gcFreeQty * m,
-  };
-}
+const HARD_FLAT_ET = "16:45";
 
 export const STRATEGIES: StrategySpec[] = [
-  mk({
-    id: "GC_gap_phase1_16",
-    symbol: "GC",
-    name: "GC_gap_phase1_16",
-    logic: "Seuraa aamugappia. Gap ylös = osta, gap alas = myy.",
-    days: "Kaikki viikonpäivät",
-    noMonday: false,
-    sessionName: "US open",
-    sessionStartEt: "09:30",
-    sessionEndEt: "16:45",
-    etWindow: "09:30 start, entry 09:45 ET",
-    helsinkiWindowNormal: "16:30 start (entry 16:45)",
-    helsinkiWindowDst: "15:30 start (entry 15:45)",
-    entryTimeEt: "09:45",
-    possibleEntryTimesEt: ["09:45"],
-    stopTicks: 24,
-    targetTicks: 72,
-    stopPriceDistance: 2.4,
-    targetPriceDistance: 7.2,
-    maxHoldBars: 4,
-    primaryQty: PORTFOLIO.primary.GC,
-    gcFreeQty: PORTFOLIO.gcFree.GC,
+  {
+    id: "2828f5a", fullId: "2828f5a — MNQ prior_day_range_fade",
+    symbol: "MNQ", family: "prior_day_range_fade", qty: 4,
+    timeframe: "15m", timeframeMinutes: 15,
+    sessionName: "Premarket", sessionStartEt: "05:00", sessionEndEt: "09:30",
+    helsinkiNormal: "12:00–16:30", helsinkiDst: "11:00–15:30",
+    possibleEntryEt: "Seuraavan 15m barin avaus signaalin jälkeen, normaalisti 05:15–09:30 ET.",
+    atrPeriod: 24, thresholdMultiple: 0.25, stopMultiple: 1.5, targetMultiple: 3.0,
+    maxHoldMinutes: 240, isFade: true,
+    description:
+      "Premarket-ikkunan fade edellisen päivän range-rikkomuksesta. Lasketaan ATR(24). " +
+      "Yläkynnys = edellisen päivän high + 0.25 × ATR(24), alakynnys = edellisen päivän low − 0.25 × ATR(24). " +
+      "Jos suljettu 15m bar sulkeutuu yläkynnyksen yli → SHORT (fade). " +
+      "Jos suljettu 15m bar sulkeutuu alakynnyksen alle → LONG (fade). " +
+      "Entry seuraavan 15m barin avauksessa, ei koskaan signaalibarin sulussa. " +
+      "Stop 1.5 × ATR(24), target 3.0 × ATR(24), max hold 240 minuuttia. Hard flat 16:45 ET.",
+    killRule: { rolling10Alert: 6.49, hardKillNet: -500, losingStreak: 8 },
+  },
+  {
+    id: "3314fd", fullId: "3314fd — MNQ overnight_range_breakout",
+    symbol: "MNQ", family: "overnight_range_breakout", qty: 5,
+    timeframe: "30m", timeframeMinutes: 30,
+    sessionName: "London", sessionStartEt: "02:00", sessionEndEt: "11:00",
+    helsinkiNormal: "09:00–18:00", helsinkiDst: "08:00–17:00",
+    possibleEntryEt:
+      "Seuraavan 30m barin avaus signaalin jälkeen — vain kun overnight high/low on tiedossa (klo 09:30 ET jälkeen).",
+    atrPeriod: 16, thresholdMultiple: 0.25, stopMultiple: 1.5, targetMultiple: 3.0,
+    maxHoldMinutes: 240, isFade: false,
+    description:
+      "Overnight-rangen läpimurto. Lasketaan ATR(16). " +
+      "Yläkynnys = overnight_high + 0.25 × ATR(16), alakynnys = overnight_low − 0.25 × ATR(16). " +
+      "Jos suljettu 30m bar sulkeutuu yläkynnyksen yli → LONG (breakout). " +
+      "Jos alakynnyksen alle → SHORT. Entry seuraavan 30m barin avauksessa. " +
+      "Stop 1.5 × ATR(16), target 3.0 × ATR(16), max hold 240 min. Hard flat 16:45 ET.",
     warning:
-      "Korkein EV mutta riskisin jalka. Seuraa 10 treidin rullaavaa PnL:ää.",
-    notes: [
-      "Edellinen päivä punainen: eilen 16:45 ET hinta oli ALLE eilen 09:30 ET hinnan.",
-      "Laske gap: (tänään 09:30 ET hinta − eilen 16:45 ET hinta) / eilen 16:45 ET hinta × 100.",
-      "Gap oltava yli +0.7% tai alle −0.7%. Gap noin 30p.",
-      "Vahvistus: katso 09:30−09:45 ET kynttilä. Gap ylös → kynttilän pitää sulkeutua vihreänä. Gap alas → kynttilän pitää sulkeutua punaisena.",
-      "Entry: 09:45 ET kynttilän avautuessa.",
-      "Stop 24 tickiä, target 72 tickiä, pidä enintään 4 kynttilää.",
-      "Sulje viimeistään 16:45 ET.",
-      "Kaikki viikonpäivät.",
-    ],
-  }),
-  mk({
-    id: "HG_imbalance_reversal_17734",
-    symbol: "HG",
-    name: "HG_imbalance_reversal_17734",
-    logic: "Iso kynttilä = käänne. Iso nousu = myy, iso lasku = osta.",
-    days: "Tiistai−perjantai (ei maanantaisin)",
-    noMonday: true,
-    sessionName: "Afternoon",
-    sessionStartEt: "13:30",
-    sessionEndEt: "16:45",
-    etWindow: "13:30–16:45 ET",
-    helsinkiWindowNormal: "20:30–23:45",
-    helsinkiWindowDst: "19:30–22:45",
-    entryTimeEt: "next-bar open",
-    possibleEntryTimesEt: [
-      "14:00","14:15","14:30","14:45",
-      "15:00","15:15","15:30","15:45",
-      "16:00","16:15","16:30",
-    ],
-    stopTicks: 16,
-    targetTicks: 72,
-    stopPriceDistance: 0.0080,
-    targetPriceDistance: 0.0360,
-    maxHoldBars: 2,
-    primaryQty: PORTFOLIO.primary.HG,
-    gcFreeQty: PORTFOLIO.gcFree.HG,
+      "3314 käyttää overnight high/low -arvoja, jotka tiedetään vasta 09:30 ET jälkeen. Varmista todellinen entry-bari OHLC-ankkuroinnilla.",
+    killRule: { rolling10Alert: 5.62, hardKillNet: -500, losingStreak: 8 },
+  },
+  {
+    id: "4ac847", fullId: "4ac847 — MNQ prior_day_close_reversion",
+    symbol: "MNQ", family: "prior_day_close_reversion", qty: 5,
+    timeframe: "60m", timeframeMinutes: 60,
+    sessionName: "London", sessionStartEt: "02:00", sessionEndEt: "11:00",
+    helsinkiNormal: "09:00–18:00", helsinkiDst: "08:00–17:00",
+    possibleEntryEt:
+      "Seuraavan 60m barin avaus signaalin jälkeen, normaalisti 03:00–11:00 ET varmennetulla barin ankkuroinnilla.",
+    atrPeriod: 5, thresholdMultiple: 0.5, stopMultiple: 1.0, targetMultiple: 2.0,
+    maxHoldMinutes: 720, isFade: true,
+    description:
+      "Reversion edellisen päivän sulkemishinnan ympärille. Lasketaan ATR(5). " +
+      "distance = (signaalin sulkemishinta − edellisen päivän close) / ATR(5). " +
+      "Jos distance > 0.5 → SHORT (kaukana yläpuolella = käänne alas). " +
+      "Jos distance < −0.5 → LONG. Entry seuraavan 60m barin avauksessa. " +
+      "Erityisprofiili: stop 1.0 × ATR(5), target 2.0 × ATR(5), max hold 720 min. " +
+      "Session-end flatten + hard flat 16:45 ET.",
     warning:
-      "Sulje viimeistään 16:45 ET. Jos 16:30 ET entry on auki klo 16:43, sulje manuaalisesti.",
-    notes: [
-      "Sessio alkaa 13:30 ET. Odota 2 kynttilää — älä katso signaalia ennen 14:00 ET.",
-      "Etsi iso kynttilä: (|sulkemishinta − avaushinta|) / avaushinta × 100 oltava yli 0.5%. Noin 175 pistettä.",
-      "Lisäksi: kynttilän body oltava yli 55% koko kynttilän pituudesta (eli lyhyet hännät).",
-      "Iso vihreä kynttilä (nousu) → myy seuraavan kynttilän avauksessa.",
-      "Iso punainen kynttilä (lasku) → osta seuraavan kynttilän avauksessa.",
-      "Viimeinen sallittu entry: 16:15 ET.",
-      "Stop 16 tickiä, target 72 tickiä, pidä enintään 2 kynttilää.",
-      "Tiistai−perjantai (ei maanantaisin).",
-    ],
-  }),
-  mk({
-    id: "MGC_imbalance_reversal_europe_x10",
-    symbol: "MGC",
-    name: "MGC_imbalance_reversal_europe_x10",
-    logic: "Etsi Eurooppa-session aikana iso 15 min kynttilä ja treidaa seuraavan kynttilän openissa vastakkaiseen suuntaan.",
-    days: "Tiistai−perjantai (ei maanantaisin)",
-    noMonday: true,
-    sessionName: "Europe / Globex",
-    sessionStartEt: "02:00",
-    sessionEndEt: "04:45",
-    etWindow: "02:00–04:45 ET",
-    helsinkiWindowNormal: "09:00–11:45 (entry-ikkuna)",
-    helsinkiWindowDst: "08:00–10:45 (entry-ikkuna)",
-    entryTimeEt: "next-bar open",
-    possibleEntryTimesEt: [
-      "02:15","02:30","02:45","03:00",
-      "03:15","03:30","03:45","04:00",
-      "04:15","04:30","04:45",
-    ],
-    stopTicks: 24,
-    targetTicks: 120,
-    stopPriceDistance: 2.4,
-    targetPriceDistance: 12.0,
-    maxHoldBars: 2,
-    primaryQty: 10,
-    gcFreeQty: 0,
-    notes: [
-      "Session 02:00–04:45 ET. Etsi iso 15 min kynttilä, joka täyttää molemmat ehdot.",
-      "Body %: |sulkemishinta − avaushinta| / avaushinta × 100 ≥ 0.35%. liike yli 15p+",
-      "Body fraction: |sulkemishinta − avaushinta| / (korkein − matalin) ≥ 0.55.",
-      "Jos korkein = matalin, signaalia ei oteta.",
-      "Vihreä signaalikynttilä (close > open) → short seuraavan kynttilän avauksessa.",
-      "Punainen signaalikynttilä (close < open) → long seuraavan kynttilän avauksessa.",
-      "Stop 24 tickiä = 2.40 gold-pistettä. Target 120 tickiä = 12.00 gold-pistettä.",
-      "Pidä enintään 2 kynttilää (noin 30 min). Jos stop tai target ei osu, sulje max hold -ajan lopussa.",
-      "Tiistai−perjantai (ei maanantaisin). Max 1 treidi per päivä.",
-    ],
-  }),
-  mk({
-    id: "YM_gap_follow_fade_3020",
-    symbol: "YM",
-    name: "YM_gap_follow_fade_3020",
-    logic: "Fadaa aamugappi. Gap ylös = myy, gap alas = osta.",
-    days: "Tiistai−perjantai (ei maanantaisin)",
-    noMonday: true,
-    sessionName: "Europe / Globex",
-    sessionStartEt: "02:00",
-    sessionEndEt: "05:00",
-    etWindow: "02:00–05:00 ET",
-    helsinkiWindowNormal: "09:00–12:00 (entry 09:30)",
-    helsinkiWindowDst: "08:00–11:00 (entry 08:30)",
-    entryTimeEt: "02:30",
-    possibleEntryTimesEt: ["02:30"],
-    stopTicks: 24,
-    targetTicks: 72,
-    stopPriceDistance: 24,
-    targetPriceDistance: 72,
-    maxHoldBars: 4,
-    primaryQty: PORTFOLIO.primary.YM,
-    gcFreeQty: PORTFOLIO.gcFree.YM,
-    notes: [
-      "Edellinen päivä punainen: eilen 16:45 ET hinta oli ALLE eilen 02:00 ET hinnan.",
-      "Laske gap: (tänään 02:00 ET hinta − eilen 16:45 ET hinta) / eilen 16:45 ET hinta × 100.",
-      "Gap oltava yli +0.7% tai alle −0.7%. noin 300p.",
-      "Gap ylös → myy, gap alas → osta (ei vahvistuskynttilää).",
-      "Entry: 02:30 ET kynttilän avautuessa.",
-      "Stop 24 pistettä, target 72 pistettä, pidä enintään 4 kynttilää.",
-      "Sulje viimeistään 05:00 ET.",
-      "Tiistai−perjantai (ei maanantaisin).",
-    ],
-  }),
-  mk({
-    id: "MES_trend_continuation_1216",
-    symbol: "MES",
-    name: "MES_trend_continuation_1216",
-    logic: "Jatka trendiä. 4 kynttilän nettoliike ≥ 0.3% + vahvistus = osta tai myy.",
-    days: "Tiistai−perjantai (ei maanantaisin)",
-    noMonday: true,
-    sessionName: "Europe / Globex",
-    sessionStartEt: "02:00",
-    sessionEndEt: "05:00",
-    etWindow: "02:00–05:00 ET",
-    helsinkiWindowNormal: "10:00–11:45 (entry-ikkuna)",
-    helsinkiWindowDst: "09:00–10:45 (entry-ikkuna)",
-    entryTimeEt: "03:00–04:45",
-    possibleEntryTimesEt: [
-      "03:00","03:15","03:30","03:45",
-      "04:00","04:15","04:30","04:45",
-    ],
-    stopTicks: 48,
-    targetTicks: 120,
-    stopPriceDistance: 12,
-    targetPriceDistance: 30,
-    maxHoldBars: 4,
-    primaryQty: PORTFOLIO.primary.MES,
-    gcFreeQty: PORTFOLIO.gcFree.MES,
-    notes: [
-      "Odota 4 kynttilää. Laske nettoliike: kynttilä 4:n sulkemishinta − kynttilä 1:n avaushinta / kynttilä 1:n avaushinta × 100.",
-      "Nettoliikkeen oltava yli +0.3% tai alle −0.3% (käytännössä noin 17 pistettä nykyhinnoilla).",
-      "Vahvistus: kynttilä 4 pitää sulkeutua liikkeen suuntaan. Nousu → kynttilä 4 vihreä. Lasku → kynttilä 4 punainen.",
-      "Nousu + vihreä vahvistus → osta kynttilä 5:n avauksessa.",
-      "Lasku + punainen vahvistus → myy kynttilä 5:n avauksessa.",
-      "Entry mahdollinen klo 03:00−04:45 ET.",
-      "Stop 48 tickiä, target 120 tickiä, pidä enintään 4 kynttilää.",
-      "Sulje viimeistään 05:00 ET.",
-      "Tiistai−perjantai (ei maanantaisin).",
-    ],
-  }),
+      "Tämä jalka käyttää eri stop/target-kerrointa (1.0/2.0) kuin muut. Älä käytä 1.5/3.0 tässä.",
+    killRule: { rolling10Alert: 3.11, hardKillNet: -500, losingStreak: 8 },
+  },
+  {
+    id: "e652", fullId: "e652 — MNQ prior_day_close_reversion",
+    symbol: "MNQ", family: "prior_day_close_reversion", qty: 4,
+    timeframe: "5m", timeframeMinutes: 5,
+    sessionName: "US open", sessionStartEt: "09:30", sessionEndEt: "12:00",
+    helsinkiNormal: "16:30–19:00", helsinkiDst: "15:30–18:00",
+    possibleEntryEt: "Seuraavan 5m barin avaus signaalin jälkeen, normaalisti 09:35–12:00 ET.",
+    atrPeriod: 36, thresholdMultiple: 1.25, stopMultiple: 1.5, targetMultiple: 3.0,
+    maxHoldMinutes: 240, isFade: true,
+    description:
+      "US-open reversion. Lasketaan ATR(36). " +
+      "distance = (signaalin close − edellisen päivän close) / ATR(36). " +
+      "Jos distance > 1.25 → SHORT, jos distance < −1.25 → LONG. " +
+      "Entry seuraavan 5m barin avauksessa. " +
+      "Stop 1.5 × ATR(36), target 3.0 × ATR(36), max hold 240 min. Hard flat 16:45 ET.",
+    warning:
+      "Heikompi / korkeariskisempi jalka. Losing streak hard-kill = 6 (ei 8).",
+    killRule: { rolling10Alert: 1.67, hardKillNet: -500, losingStreak: 6 },
+  },
+  {
+    id: "c2c181", fullId: "c2c181 — MNQ prior_day_range_fade",
+    symbol: "MNQ", family: "prior_day_range_fade", qty: 4,
+    timeframe: "30m", timeframeMinutes: 30,
+    sessionName: "London", sessionStartEt: "02:00", sessionEndEt: "11:00",
+    helsinkiNormal: "09:00–18:00", helsinkiDst: "08:00–17:00",
+    possibleEntryEt: "Seuraavan 30m barin avaus signaalin jälkeen, normaalisti 02:30–11:00 ET.",
+    atrPeriod: 6, thresholdMultiple: 0.25, stopMultiple: 1.5, targetMultiple: 3.0,
+    maxHoldMinutes: 240, isFade: true,
+    description:
+      "London-session fade edellisen päivän range-rikkomuksesta. Lasketaan ATR(6). " +
+      "Yläkynnys = prev_high + 0.25 × ATR(6), alakynnys = prev_low − 0.25 × ATR(6). " +
+      "Yläkynnys ylittyy → SHORT, alakynnys alittuu → LONG (fade). " +
+      "Entry seuraavan 30m barin avauksessa. Stop 1.5 × ATR(6), target 3.0 × ATR(6). " +
+      "Max hold 240 min, hard flat 16:45 ET.",
+    killRule: { rolling10Alert: 5.00, hardKillNet: -500, losingStreak: 8 },
+  },
+  {
+    id: "cd8e66", fullId: "cd8e66 — MNQ prior_day_range_breakout",
+    symbol: "MNQ", family: "prior_day_range_breakout", qty: 4,
+    timeframe: "15m", timeframeMinutes: 15,
+    sessionName: "Afternoon", sessionStartEt: "13:30", sessionEndEt: "16:30",
+    helsinkiNormal: "20:30–23:30", helsinkiDst: "19:30–22:30",
+    possibleEntryEt: "Seuraavan 15m barin avaus signaalin jälkeen, normaalisti 13:45–16:30 ET.",
+    atrPeriod: 5, thresholdMultiple: 0.25, stopMultiple: 1.5, targetMultiple: 3.0,
+    maxHoldMinutes: 240, isFade: false,
+    description:
+      "Iltapäivän breakout edellisen päivän rangen yli. Lasketaan ATR(5). " +
+      "Yläkynnys = prev_high + 0.25 × ATR(5), alakynnys = prev_low − 0.25 × ATR(5). " +
+      "Yläkynnys ylittyy → LONG (breakout), alakynnys alittuu → SHORT. " +
+      "Entry seuraavan 15m barin avauksessa. Stop 1.5 × ATR(5), target 3.0 × ATR(5). " +
+      "Max hold 240 min, hard flat 16:45 ET.",
+    killRule: { rolling10Alert: 8.43, hardKillNet: -500, losingStreak: 8 },
+  },
+  {
+    id: "6d352449", fullId: "6d352449 — GC camarilla_breakout",
+    symbol: "GC", family: "camarilla_breakout", qty: 1,
+    timeframe: "30m", timeframeMinutes: 30,
+    sessionName: "Premarket", sessionStartEt: "05:00", sessionEndEt: "09:30",
+    helsinkiNormal: "12:00–16:30", helsinkiDst: "11:00–15:30",
+    possibleEntryEt: "Seuraavan 30m barin avaus signaalin jälkeen, normaalisti 05:30–09:30 ET.",
+    atrPeriod: 6, thresholdMultiple: 0.25, stopMultiple: 1.5, targetMultiple: 3.0,
+    maxHoldMinutes: 240, isFade: false,
+    description:
+      "Camarilla R4/S4 breakout kullassa (GC). Lasketaan ATR(6) sekä Camarilla-tasot: " +
+      "R4 = prev_close + 1.1 × (prev_high − prev_low) / 2; S4 = prev_close − 1.1 × (prev_high − prev_low) / 2. " +
+      "Yläkynnys = R4 + 0.25 × ATR(6), alakynnys = S4 − 0.25 × ATR(6). " +
+      "Yläkynnys ylittyy → LONG, alakynnys alittuu → SHORT. " +
+      "Entry seuraavan 30m barin avauksessa. Stop 1.5 × ATR(6), target 3.0 × ATR(6). " +
+      "Max hold 240 min, hard flat 16:45 ET.",
+    warning:
+      "GC: korkea false-discovery -riski mutta historiallisesti yksi sileimmistä jaloista. Seuraa erikseen.",
+    killRule: { rolling10Alert: 18.95, hardKillNet: -758, losingStreak: 8 },
+  },
+  {
+    id: "ac172a2d", fullId: "ac172a2d — NG camarilla_breakout",
+    symbol: "NG", family: "camarilla_breakout", qty: 1,
+    timeframe: "30m", timeframeMinutes: 30,
+    sessionName: "London", sessionStartEt: "02:00", sessionEndEt: "11:00",
+    helsinkiNormal: "09:00–18:00", helsinkiDst: "08:00–17:00",
+    possibleEntryEt: "Seuraavan 30m barin avaus signaalin jälkeen, normaalisti 02:30–11:00 ET.",
+    atrPeriod: 5, thresholdMultiple: 0.25, stopMultiple: 1.5, targetMultiple: 3.0,
+    maxHoldMinutes: 240, isFade: false,
+    description:
+      "Camarilla R4/S4 breakout maakaasussa (NG). Lasketaan ATR(5) sekä Camarilla: " +
+      "R4 = prev_close + 1.1 × (prev_high − prev_low) / 2; S4 = prev_close − 1.1 × (prev_high − prev_low) / 2. " +
+      "Yläkynnys = R4 + 0.25 × ATR(5), alakynnys = S4 − 0.25 × ATR(5). " +
+      "Yläkynnys ylittyy → LONG, alakynnys alittuu → SHORT. " +
+      "Entry seuraavan 30m barin avauksessa. Stop 1.5 × ATR(5), target 3.0 × ATR(5). " +
+      "Max hold 240 min, hard flat 16:45 ET.",
+    warning:
+      "NG: heikompi / korkeariskisempi jalka. Losing streak hard-kill = 6 (ei 8).",
+    killRule: { rolling10Alert: 14.35, hardKillNet: -574, losingStreak: 6 },
+  },
 ];
 
-export const PORTFOLIO_NOTE =
-  "Primary on high-EV / high-churn portfolio (sis. GC). GC-free on konservatiivinen vertailu — paperissa seurataan rinnakkain, jotta nähdään onko GC EV:n arvoinen.";
-
-export const GENERAL_RULES = [
-  "Chart timeframe: 15 min — timezone New York / ET",
-  "Entry next-bar open (paitsi GC phase1 jossa 09:45 fixed)",
-  "Stop-first ordering jos stop ja target osuvat saman 15 min barin sisään",
-  "Ei overnight — kaikki flat ennen 16:45 ET cutoffia",
-  "Yksi treidi per strategia per päivä",
-  "Max 10 mini-equivalent samanaikaisesti (ei päivän total)",
-  "Paperissa: kirjaa sekä theoretical (backtest) että actual (paper) fill",
-];
-
-export const LUCID_EV_CONTEXT = {
-  monthlyMedian: "€3,393 / kk (M18-60, 5 Direct-tiliä)",
-  fiveYearMedian: "€175,628",
-  fiveYearP10: "€87,768",
-  firstPayoutDays: "204–214 päivää",
-  breachRate: "0.82 breach / account / year",
-  worstDay: "≈ −$2,879",
-  tradesPerMonth: "4.9",
-  activeDaysPerMonth: "4.4",
-  disclaimer: "Backtest-odotus — ei takuu tulevasta tuotosta.",
-};
-
-export function getStrategyForSymbol(sym: Symbol): StrategySpec {
-  return STRATEGIES.find((s) => s.symbol === sym)!;
+export function getStrategy(id: string): StrategySpec | undefined {
+  return STRATEGIES.find((s) => s.id === id);
 }
 
-export function computePnl(
+export const GENERAL_RULES = [
+  "Aikavyöhyke: New York / ET on totuus. Helsinki on vain helper (ET+7 normaalisti, ET+6 DST-mismatch).",
+  "Signaali käyttää aina vain SULJETTUA signaalibaria. Älä koskaan ota entryä signaalibarin sulkuhetkellä.",
+  "Entry = seuraavan saman aikajakson barin avaus.",
+  "Stop ja target aktiiviset välittömästi entryn jälkeen.",
+  "Ei overnight-positioita. Hard flat viimeistään 16:45 ET.",
+  "Max hold tai 16:45 flat — kumpi tulee ensin → exit siinä.",
+  "Sama jalka ei avaa uutta positiota jos edellinen saman jalan treidi on vielä auki.",
+  "Manuaalinen entry — kirjaa sekä theoretical (signaaliperusteinen) että actual (paper fill).",
+];
+
+// ---- PnL formulas --------------------------------------------------------
+
+export function ticksBetween(
   symbol: Symbol,
-  direction: "Long" | "Short",
+  direction: "long" | "short",
+  entry: number,
+  exit: number,
+): number {
+  const { size } = TICK[symbol];
+  const diff = direction === "long" ? exit - entry : entry - exit;
+  return diff / size;
+}
+
+export function computeGrossPnl(
+  symbol: Symbol,
+  direction: "long" | "short",
   entry: number,
   exit: number,
   qty: number,
 ): number {
-  const t = TICK[symbol];
-  const diff = direction === "Long" ? exit - entry : entry - exit;
-  return (diff / t.size) * t.value * qty;
+  const t = ticksBetween(symbol, direction, entry, exit);
+  return t * TICK[symbol].value * qty;
 }
 
-// ---------- Today / weekday schedule (ET) ----------
+export function computeCommission(symbol: Symbol, qty: number): number {
+  return TICK[symbol].commission * 2 * qty;
+}
+
+export function computeNetPnl(
+  symbol: Symbol,
+  direction: "long" | "short",
+  entry: number,
+  exit: number,
+  qty: number,
+  slippage = 0,
+): number {
+  return computeGrossPnl(symbol, direction, entry, exit, qty)
+    - computeCommission(symbol, qty)
+    - slippage;
+}
+
+// ---- Signal threshold computation ---------------------------------------
+
+export function computeThresholds(
+  spec: StrategySpec,
+  ctx: {
+    prevHigh?: number; prevLow?: number; prevClose?: number;
+    overnightHigh?: number; overnightLow?: number;
+    atr: number;
+  },
+): { upper: number | null; lower: number | null; r4?: number; s4?: number; distanceThreshold?: number } {
+  const m = spec.thresholdMultiple;
+  switch (spec.family) {
+    case "prior_day_range_fade":
+    case "prior_day_range_breakout": {
+      if (ctx.prevHigh == null || ctx.prevLow == null) return { upper: null, lower: null };
+      return { upper: ctx.prevHigh + m * ctx.atr, lower: ctx.prevLow - m * ctx.atr };
+    }
+    case "overnight_range_breakout": {
+      if (ctx.overnightHigh == null || ctx.overnightLow == null) return { upper: null, lower: null };
+      return { upper: ctx.overnightHigh + m * ctx.atr, lower: ctx.overnightLow - m * ctx.atr };
+    }
+    case "camarilla_breakout": {
+      if (ctx.prevHigh == null || ctx.prevLow == null || ctx.prevClose == null) return { upper: null, lower: null };
+      const range = ctx.prevHigh - ctx.prevLow;
+      const r4 = ctx.prevClose + 1.1 * range / 2;
+      const s4 = ctx.prevClose - 1.1 * range / 2;
+      return { upper: r4 + m * ctx.atr, lower: s4 - m * ctx.atr, r4, s4 };
+    }
+    case "prior_day_close_reversion": {
+      // distance-based — thresholds expressed as distance
+      return { upper: null, lower: null, distanceThreshold: m };
+    }
+  }
+}
+
+export function evaluateSignal(
+  spec: StrategySpec,
+  signalClose: number,
+  ctx: {
+    prevHigh?: number; prevLow?: number; prevClose?: number;
+    overnightHigh?: number; overnightLow?: number;
+    atr: number;
+  },
+): { direction: "long" | "short" | "none"; distance?: number; upper?: number | null; lower?: number | null; r4?: number; s4?: number } {
+  if (spec.family === "prior_day_close_reversion") {
+    if (ctx.prevClose == null || ctx.atr <= 0) return { direction: "none" };
+    const distance = (signalClose - ctx.prevClose) / ctx.atr;
+    const thr = spec.thresholdMultiple;
+    if (distance > thr) return { direction: "short", distance };  // fade
+    if (distance < -thr) return { direction: "long", distance };
+    return { direction: "none", distance };
+  }
+  const t = computeThresholds(spec, ctx);
+  if (t.upper == null || t.lower == null) return { direction: "none", ...t };
+  if (signalClose > t.upper) {
+    return { direction: spec.isFade ? "short" : "long", ...t };
+  }
+  if (signalClose < t.lower) {
+    return { direction: spec.isFade ? "long" : "short", ...t };
+  }
+  return { direction: "none", ...t };
+}
+
+// ---- ET clock ------------------------------------------------------------
+
+export type EtNow = {
+  dow: number;
+  hh: number;
+  mm: number;
+  dateStr: string;
+  weekdayName: string;
+};
+
+export function nowInET(now: Date = new Date()): EtNow {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const parts = fmt.formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const wkMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dow = wkMap[get("weekday")] ?? 0;
+  const hh = parseInt(get("hour"), 10);
+  // Intl returns "24" at midnight in some browsers
+  const safeHh = hh === 24 ? 0 : hh;
+  const mm = parseInt(get("minute"), 10);
+  const dateStr = `${get("year")}-${get("month")}-${get("day")}`;
+  const fiNames = ["Sunnuntai", "Maanantai", "Tiistai", "Keskiviikko", "Torstai", "Perjantai", "Lauantai"];
+  return { dow, hh: safeHh, mm, dateStr, weekdayName: fiNames[dow] };
+}
+
+function hhmmToMin(s: string): number {
+  const [h, m] = s.split(":").map(Number);
+  return h * 60 + (m || 0);
+}
 
 export type TodayItem = {
-  sym: Symbol;
   spec: StrategySpec;
   status: "upcoming" | "active" | "completed";
   alerts: string[];
 };
 
-/** Get current time in ET as { dow, hh, mm, dateStr } using Intl. */
-export function nowInET(now: Date = new Date()): {
-  dow: number; // 0=Sun..6=Sat in ET
-  hh: number;
-  mm: number;
-  dateStr: string; // YYYY-MM-DD ET
-  weekdayName: string;
-} {
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    weekday: "short",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  const parts = fmt.formatToParts(now);
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-  const wkMap: Record<string, number> = { Sun:0, Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6 };
-  const weekdayShort = get("weekday");
-  const dow = wkMap[weekdayShort] ?? 0;
-  const hh = parseInt(get("hour"), 10);
-  const mm = parseInt(get("minute"), 10);
-  const dateStr = `${get("year")}-${get("month")}-${get("day")}`;
-  const fiNames = ["Sunnuntai","Maanantai","Tiistai","Keskiviikko","Torstai","Perjantai","Lauantai"];
-  return { dow, hh, mm, dateStr, weekdayName: fiNames[dow] };
-}
-
-function hhmmToMinutes(s: string): number {
-  const [h, m] = s.split(":").map(Number);
-  return h * 60 + (m || 0);
-}
-
 export function getTodayStrategies(now: Date = new Date()): TodayItem[] {
   const { dow, hh, mm } = nowInET(now);
   if (dow === 0 || dow === 6) return [];
   const cur = hh * 60 + mm;
-
-  return STRATEGIES.filter((s) => (dow === 1 ? !s.noMonday : true)).map((s) => {
-    const start = hhmmToMinutes(s.sessionStartEt);
-    const end = hhmmToMinutes(s.sessionEndEt);
-    const entry = hhmmToMinutes(s.possibleEntryTimesEt[0] ?? s.sessionStartEt);
+  return STRATEGIES.map((spec) => {
+    const start = hhmmToMin(spec.sessionStartEt);
+    const end = hhmmToMin(spec.sessionEndEt);
     let status: TodayItem["status"];
     if (cur < start) status = "upcoming";
-    else if (cur >= start && cur < end) status = "active";
+    else if (cur < end) status = "active";
     else status = "completed";
-
     const alerts: string[] = [];
-    if (cur >= entry - 15 && cur < entry) alerts.push("Upcoming entry < 15 min");
-    if (status === "active") alerts.push("Session active");
-    if (s.symbol === "HG") {
-      alerts.push("Jos 16:30 ET entry on auki klo 16:43, sulje manuaalisesti.");
-    }
-    if (s.symbol === "GC") alerts.push("Korkein EV mutta riskisin jalka. Seuraa 10 treidin rullaavaa PnL:ää.");
-    return { sym: s.symbol, spec: s, status, alerts };
+    if (cur >= start - 15 && cur < start) alerts.push("Sessio alkaa < 15 min");
+    if (status === "active") alerts.push("Sessio aktiivinen");
+    if (spec.warning) alerts.push(spec.warning);
+    return { spec, status, alerts };
   });
+}
+
+// ---- Self-tests ---------------------------------------------------------
+
+export type TestResult = { name: string; pass: boolean; detail: string };
+
+function approx(a: number, b: number, eps = 1e-6) { return Math.abs(a - b) <= eps; }
+
+export function runPhidiasTests(): TestResult[] {
+  const out: TestResult[] = [];
+
+  // MNQ long PnL
+  {
+    const gross = computeGrossPnl("MNQ", "long", 30000, 30010, 4);
+    const comm = computeCommission("MNQ", 4);
+    const net = gross - comm;
+    out.push({
+      name: "MNQ long 30000→30010 ×4",
+      pass: approx(gross, 80) && approx(comm, 6.32) && approx(net, 73.68, 1e-4),
+      detail: `gross=${gross} comm=${comm} net=${net}`,
+    });
+  }
+  // GC short
+  {
+    const gross = computeGrossPnl("GC", "short", 4300.0, 4290.0, 1);
+    const comm = computeCommission("GC", 1);
+    out.push({
+      name: "GC short 4300→4290 ×1",
+      pass: approx(gross, 1000) && approx(comm, 4.84) && approx(gross - comm, 995.16, 1e-3),
+      detail: `gross=${gross} comm=${comm} net=${gross - comm}`,
+    });
+  }
+  // NG long
+  {
+    const gross = computeGrossPnl("NG", "long", 3.000, 3.010, 1);
+    const comm = computeCommission("NG", 1);
+    out.push({
+      name: "NG long 3.000→3.010 ×1",
+      pass: approx(gross, 100, 1e-6) && approx(comm, 4.64) && approx(gross - comm, 95.36, 1e-3),
+      detail: `gross=${gross} comm=${comm} net=${gross - comm}`,
+    });
+  }
+  // Prior day range fade
+  {
+    const fadeSpec = STRATEGIES.find((s) => s.id === "2828f5a")!;
+    const t = computeThresholds(fadeSpec, { prevHigh: 30000, prevLow: 29800, atr: 100 });
+    const okThr = approx(t.upper!, 30025) && approx(t.lower!, 29775);
+    const sigShort = evaluateSignal(fadeSpec, 30030, { prevHigh: 30000, prevLow: 29800, atr: 100 });
+    const sigLong  = evaluateSignal(fadeSpec, 29770, { prevHigh: 30000, prevLow: 29800, atr: 100 });
+    out.push({
+      name: "Range fade thresholds + signals",
+      pass: okThr && sigShort.direction === "short" && sigLong.direction === "long",
+      detail: `upper=${t.upper} lower=${t.lower} short=${sigShort.direction} long=${sigLong.direction}`,
+    });
+  }
+  // Prior day range breakout
+  {
+    const bSpec = STRATEGIES.find((s) => s.id === "cd8e66")!;
+    const sigLong  = evaluateSignal(bSpec, 30030, { prevHigh: 30000, prevLow: 29800, atr: 100 });
+    const sigShort = evaluateSignal(bSpec, 29770, { prevHigh: 30000, prevLow: 29800, atr: 100 });
+    out.push({
+      name: "Range breakout signals (LONG above, SHORT below)",
+      pass: sigLong.direction === "long" && sigShort.direction === "short",
+      detail: `up=${sigLong.direction} dn=${sigShort.direction}`,
+    });
+  }
+  // Reversion
+  {
+    const r = STRATEGIES.find((s) => s.id === "4ac847")!;
+    const sShort = evaluateSignal(r, 30060, { prevClose: 30000, atr: 100 });
+    const sLong  = evaluateSignal(r, 29940, { prevClose: 30000, atr: 100 });
+    out.push({
+      name: "Reversion distance signals",
+      pass: sShort.direction === "short" && approx(sShort.distance!, 0.6, 1e-9)
+         && sLong.direction === "long" && approx(sLong.distance!, -0.6, 1e-9),
+      detail: `short=${sShort.distance} long=${sLong.distance}`,
+    });
+  }
+  // Camarilla
+  {
+    const c = STRATEGIES.find((s) => s.id === "6d352449")!;
+    const t = computeThresholds(c, { prevHigh: 30500, prevLow: 29500, prevClose: 30000, atr: 0 });
+    out.push({
+      name: "Camarilla R4/S4 calculation",
+      pass: approx(t.r4!, 30550) && approx(t.s4!, 29450),
+      detail: `R4=${t.r4} S4=${t.s4}`,
+    });
+  }
+  return out;
 }

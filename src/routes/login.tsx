@@ -12,7 +12,8 @@ export const Route = createFileRoute("/login")({
 });
 
 // Single shared account for password-only access.
-const SHARED_EMAIL = "trader@luciddirect.local";
+const SHARED_EMAIL = "trader@phidias.local";
+
 
 function LoginPage() {
   const navigate = useNavigate();
@@ -60,11 +61,12 @@ function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="text-xl">LucidDirect Journal</CardTitle>
+          <CardTitle className="text-xl">Phidias Risk Bounded</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Paper-forward seuranta — anna salasana
+            Paper Shadow Journal — anna salasana
           </p>
         </CardHeader>
+
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
