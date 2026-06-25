@@ -4,13 +4,20 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   BarChart, Bar, CartesianGrid, ReferenceLine,
 } from "recharts";
-import { TICK, STRATEGIES, LUCID_EV_CONTEXT, type Symbol } from "@/lib/strategies";
-import { AlertTriangle } from "lucide-react";
+import {
+  STRATEGIES, ACCOUNT_STRUCTURES, DEFAULT_ACCOUNT_STRUCTURE,
+  EXPECTED_RETURNS, PHIDIAS_RULES, runPhidiasTests,
+  type AccountStructure,
+} from "@/lib/strategies";
+import { AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/tulokset")({
   component: ResultsPage,
@@ -19,30 +26,46 @@ export const Route = createFileRoute("/_authenticated/tulokset")({
 type T = {
   id: string;
   date_et: string | null;
-  lucid_eod_day: string | null;
+  leg_id: string | null;
+  phase: string | null;
   symbol: string;
+  family: string | null;
   trade_status: string | null;
+  direction: string | null;
   exit_reason: string | null;
+  qty: number | null;
+  entry_time_et: string | null;
+  exit_time_et: string | null;
+  signal_time_et: string | null;
   net_pnl_current: number | null;
-  net_pnl_optimized: number | null;
   gross_pnl_current: number | null;
-  gross_pnl_optimized: number | null;
   theoretical_pnl: number | null;
   actual_pnl: number | null;
   actual_minus_theoretical: number | null;
+  commissions_current: number | null;
+  slippage_est: number | null;
+  rule_followed: boolean | null;
+  rule_error_type: string | null;
   entry_price_actual: number | null;
   entry_price_theoretical: number | null;
-  rule_followed: boolean | null;
-  entry_time_et: string | null;
-  mini_equivalent: number | null;
 };
 
-const SYMBOLS: Symbol[] = ["YM", "HG", "MES", "GC"];
+const VOL_REGIMES = ["unknown", "low", "mid", "high"] as const;
 
 function ResultsPage() {
   const { user } = useAuth();
   const [trades, setTrades] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
+  const [accStruct, setAccStruct] = useState<AccountStructure>(DEFAULT_ACCOUNT_STRUCTURE);
+  const [volRegime, setVolRegime] = useState<string>("unknown");
+  const [paperStart, setPaperStart] = useState<string>(() =>
+    typeof localStorage !== "undefined" && localStorage.getItem("phidias_paper_start") || "");
+
+  useEffect(() => {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("phidias_paper_start", paperStart);
+    }
+  }, [paperStart]);
 
   useEffect(() => {
     if (!user) return;
@@ -50,83 +73,198 @@ function ResultsPage() {
       setLoading(true);
       const { data } = await supabase
         .from("trades")
-        .select("id,date_et,lucid_eod_day,symbol,trade_status,exit_reason,net_pnl_current,net_pnl_optimized,gross_pnl_current,gross_pnl_optimized,theoretical_pnl,actual_pnl,actual_minus_theoretical,entry_price_actual,entry_price_theoretical,rule_followed,entry_time_et,mini_equivalent")
-        .order("lucid_eod_day", { ascending: true });
-      setTrades((data ?? []) as T[]);
+        .select("id,date_et,leg_id,phase,symbol,family,trade_status,direction,exit_reason,qty,entry_time_et,exit_time_et,signal_time_et,net_pnl_current,gross_pnl_current,theoretical_pnl,actual_pnl,actual_minus_theoretical,commissions_current,slippage_est,rule_followed,rule_error_type,entry_price_actual,entry_price_theoretical")
+        .order("date_et", { ascending: true });
+      setTrades((data ?? []) as unknown as T[]);
       setLoading(false);
     })();
   }, [user]);
 
-  const primary = useMemo(() => computeStats(trades, "current"), [trades]);
-  const gcFree  = useMemo(() => computeStats(trades, "optimized"), [trades]);
-  const bySymbol = useMemo(() => bySym(trades), [trades]);
-  const exec = useMemo(() => execQuality(trades), [trades]);
-  const equityPrim = useMemo(() => equityCurve(trades, "current"), [trades]);
-  const equityGcFree = useMemo(() => equityCurve(trades, "optimized"), [trades]);
-  const dailyPrim = useMemo(() => dailyAgg(trades, "current"), [trades]);
+  const struct = ACCOUNT_STRUCTURES.find((s) => s.id === accStruct)!;
+  const taken = useMemo(() => trades.filter((t) => t.trade_status === "taken"), [trades]);
 
-  const gcWatch = useMemo(() => buildWatch(trades, "GC", -3000), [trades]);
-  const mesWatch = useMemo(() => buildWatch(trades, "MES", -2000), [trades]);
-  const ymWatch = useMemo(() => buildWatch(trades, "YM", -2000), [trades]);
-  const hgWatch = useMemo(() => buildWatch(trades, "HG", -2000), [trades]);
+  const portfolio = useMemo(() => computePortfolio(taken), [taken]);
+  const equity = useMemo(() => equityCurve(taken), [taken]);
+  const dailyAgg = useMemo(() => dailyPnl(taken), [taken]);
+  const perLeg = useMemo(() => perLegStats(trades), [trades]);
+  const execStats = useMemo(() => executionStats(trades), [trades]);
 
-  if (loading) return <div className="text-sm text-muted-foreground">Ladataan…</div>;
-  if (trades.length === 0) {
-    return <div className="text-sm text-muted-foreground">Ei treidejä vielä — lisää ensimmäinen Loki-sivulla.</div>;
+  const calendarDays = paperStart
+    ? Math.max(0, Math.floor((Date.now() - new Date(paperStart + "T00:00:00Z").getTime()) / 86400000))
+    : 0;
+
+  const dailyValues = dailyAgg.map((d) => d.pnl);
+  const worstDay = dailyValues.length ? Math.min(...dailyValues) : 0;
+  const eodTrailingDD = computeEodTrailingDD(equity);
+
+  // Pause-rule evaluation
+  const portfolioPF = portfolio.profitFactor;
+  const pauses: { level: "info" | "warn" | "fatal"; msg: string }[] = [];
+  if (portfolio.totalNet <= -struct.totalDrawdown) {
+    pauses.push({ level: "fatal", msg: `Cumulative net ${fmt$(portfolio.totalNet)} ≤ −${fmt$(struct.totalDrawdown)} → PAUSE koko sleeve.` });
+  }
+  if (worstDay <= -struct.totalDrawdown) {
+    pauses.push({ level: "fatal", msg: `Yksittäinen päivä ${fmt$(worstDay)} ≤ −${fmt$(struct.totalDrawdown)} → PAUSE.` });
+  }
+  if (taken.length >= 10 && portfolioPF < 0.90) {
+    pauses.push({ level: "warn", msg: `Portfolion PF ${portfolioPF.toFixed(2)} < 0.90 → tutki ja paussi.` });
+  }
+  const hardFlatViolations = trades.filter((t) => t.exit_time_et && t.exit_time_et > "16:45").length;
+  if (hardFlatViolations > 0) {
+    pauses.push({ level: "warn", msg: `${hardFlatViolations} treidiä → exit > 16:45 ET.` });
   }
 
-  const winningDays = dailyPrim.filter((d) => d.pnl >= 250).length;
-  const cycles = Math.floor(winningDays / 5);
-  const eq = equityPrim;
-  const peakEq = eq.reduce((m, p) => Math.max(m, p.equity), 0);
-  const ddNow = (eq.at(-1)?.equity ?? 0) - peakEq;
-  const dailyValues = dailyPrim.map((d) => d.pnl);
-  const worstDay = dailyValues.length ? Math.min(...dailyValues) : 0;
-  const dllSoftLockDays = dailyValues.filter((v) => v <= -3000).length;
-  const mllBreach = ddNow <= -5000;
+  // Funded eligibility
+  let eligibility: "not_enough" | "review" | "pause" | "kill_review" = "not_enough";
+  if (calendarDays >= 60 && taken.length >= 30) eligibility = "review";
+  if (pauses.some((p) => p.level === "warn")) eligibility = "pause";
+  if (pauses.some((p) => p.level === "fatal")) eligibility = "kill_review";
+
+  if (loading) return <div className="text-sm text-muted-foreground">Ladataan…</div>;
 
   return (
     <div className="space-y-6">
-      {/* Top alerts */}
-      <div className="space-y-2">
-        {mllBreach && <Alert tone="destructive">MLL breach estimate: drawdown {fmt$(ddNow)} ≤ −$5,000.</Alert>}
-        {dllSoftLockDays > 0 && <Alert tone="warning">DLL soft-lock: {dllSoftLockDays} päivä(ä) ≤ −$3,000.</Alert>}
-        {gcWatch.alert && <Alert tone="destructive">GC deterioration: rolling 10-trade {fmt$(gcWatch.rolling10)}.</Alert>}
-        {gcWatch.threeStops && <Alert tone="warning">GC: 3 stop exits peräkkäin.</Alert>}
-        {mesWatch.alert && <Alert tone="warning">MES rolling 10-trade {fmt$(mesWatch.rolling10)} — execution leakage.</Alert>}
-        {ymWatch.alert && <Alert tone="warning">YM rolling 10-trade {fmt$(ymWatch.rolling10)}.</Alert>}
-        {exec.actualMinusTheo < -200 && <Alert tone="warning">Execution leakage: actual {fmt$(exec.actualMinusTheo)} vs theoretical.</Alert>}
-      </div>
-
-      {/* Portfolio Summary */}
-      <div className="grid md:grid-cols-2 gap-4">
-        <PortfolioStatsCard title="Primary (high-EV, sis. GC)" stats={primary} accent="primary"
-          extras={{ winningDays, cycles, ddNow, worstDay }} />
-        <PortfolioStatsCard title="GC-free (vertailu)" stats={gcFree} accent="muted"
-          extras={{ winningDays: dailyAgg(trades,"optimized").filter(d => d.pnl >= 250).length, cycles: 0, ddNow: 0, worstDay: 0 }} />
-      </div>
-
-      {/* Lucid EV context */}
+      {/* Phidias context header */}
       <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-sm">Lucid EV-context (backtest expectation, not guarantee)</CardTitle></CardHeader>
-        <CardContent className="grid sm:grid-cols-2 gap-1 text-sm">
-          <Row label="Median M18-60 (5 tiliä)" v={LUCID_EV_CONTEXT.monthlyMedian} />
-          <Row label="5Y median net" v={LUCID_EV_CONTEXT.fiveYearMedian} />
-          <Row label="5Y P10 net" v={LUCID_EV_CONTEXT.fiveYearP10} />
-          <Row label="First payout median" v={LUCID_EV_CONTEXT.firstPayoutDays} />
-          <Row label="Breach rate" v={LUCID_EV_CONTEXT.breachRate} />
-          <Row label="Worst modeled day" v={LUCID_EV_CONTEXT.worstDay} />
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Phidias Risk Bounded — paper-shadow konteksti</CardTitle>
+        </CardHeader>
+        <CardContent className="grid md:grid-cols-3 gap-3">
+          <div>
+            <Label className="text-xs text-muted-foreground">Account structure</Label>
+            <Select value={accStruct} onValueChange={(v) => setAccStruct(v as AccountStructure)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {ACCOUNT_STRUCTURES.map((s) => <SelectItem key={s.id} value={s.id}>{s.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <div className="text-[11px] text-muted-foreground mt-1">
+              Yht. DD ${struct.totalDrawdown.toLocaleString()} · Eval target ${struct.totalEvalTarget.toLocaleString()}
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs text-muted-foreground">Volatility regime</Label>
+            <Select value={volRegime} onValueChange={setVolRegime}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {VOL_REGIMES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <div className="text-[11px] text-muted-foreground mt-1">
+              Mediaani: low {EXPECTED_RETURNS.volRegime.low} · mid {EXPECTED_RETURNS.volRegime.mid} · high {EXPECTED_RETURNS.volRegime.high}
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs text-muted-foreground">Paper-shadow alku (pvm)</Label>
+            <input type="date" value={paperStart} onChange={(e) => setPaperStart(e.target.value)}
+              className="w-full h-9 px-3 rounded-md border bg-background text-sm" />
+            <div className="text-[11px] text-muted-foreground mt-1">
+              {calendarDays} kalenteripäivää · {taken.length}/30 treidiä tarvitaan ennen funded-review
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Alerts */}
+      {pauses.length > 0 && (
+        <div className="space-y-2">
+          {pauses.map((p, i) => <Alert key={i} tone={p.level === "fatal" ? "destructive" : "warning"}>{p.msg}</Alert>)}
+        </div>
+      )}
+
+      {/* Top summary cards */}
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center justify-between">
+              <span>Paper-shadow summary</span>
+              <EligibilityBadge value={eligibility} />
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm space-y-1">
+            <Row label="Total trades (taken)" v={String(taken.length)} />
+            <Row label="Calendar days" v={String(calendarDays)} />
+            <Row label="Funded-review portti" v={"≥ 60–90 päivää AND ≥ 30 treidiä"} />
+            <Row label="Status" v={
+              eligibility === "not_enough" ? "Not enough data"
+                : eligibility === "review" ? "Eligible for review"
+                  : eligibility === "pause" ? "Pause"
+                    : "Kill review"
+            } />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">Portfolio PnL</CardTitle></CardHeader>
+          <CardContent className="text-sm">
+            <div className={`text-2xl font-bold tabular-nums mb-2 ${portfolio.totalNet >= 0 ? "text-success" : "text-destructive"}`}>
+              {fmt$(portfolio.totalNet)}
+            </div>
+            <div className="grid grid-cols-2 gap-y-1 gap-x-4">
+              <Row label="Gross" v={fmt$(portfolio.totalGross)} />
+              <Row label="Profit factor" v={portfolio.profitFactor.toFixed(2)} />
+              <Row label="Win rate" v={`${(portfolio.winRate * 100).toFixed(1)}%`} />
+              <Row label="Avg win" v={fmt$(portfolio.avgWin)} />
+              <Row label="Avg loss" v={fmt$(portfolio.avgLoss)} />
+              <Row label="Best trade" v={fmt$(portfolio.bestTrade)} />
+              <Row label="Worst trade" v={fmt$(portfolio.worstTrade)} />
+              <Row label="Best day" v={fmt$(portfolio.bestDay)} />
+              <Row label="Worst day" v={fmt$(portfolio.worstDay)} />
+              <Row label="Max drawdown" v={fmt$(portfolio.maxDrawdown)} />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">Account / Risk</CardTitle></CardHeader>
+          <CardContent className="text-sm space-y-1">
+            <Row label="Selected structure" v={struct.label} />
+            <Row label="100K drawdown" v={`$${PHIDIAS_RULES.drawdown["100K"].toLocaleString()}`} />
+            <Row label="150K drawdown" v={`$${PHIDIAS_RULES.drawdown["150K"].toLocaleString()}`} />
+            <Row label="Worst day vs sleeve DD" v={`${fmt$(worstDay)} / −$${struct.totalDrawdown.toLocaleString()}`} />
+            <Row label="EOD trailing DD (current)" v={fmt$(eodTrailingDD)} />
+            <Row label="Hard flat 16:45 violations" v={String(hardFlatViolations)} />
+            <Row label="DLL" v="ei (Phidias)" />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">Phidias evaluation / funded</CardTitle></CardHeader>
+          <CardContent className="text-sm space-y-1">
+            <Row label="100K eval target" v={`$${PHIDIAS_RULES.evalTarget["100K"].toLocaleString()}`} />
+            <Row label="150K eval target" v={`$${PHIDIAS_RULES.evalTarget["150K"].toLocaleString()}`} />
+            <Row label="Eval consistency" v={`${PHIDIAS_RULES.evaluationConsistency * 100}%`} />
+            <Row label="Funded consistency" v={`${PHIDIAS_RULES.fundedConsistency * 100}%`} />
+            <Row label="Payout interval" v={`${PHIDIAS_RULES.payoutIntervalDays} päivää`} />
+            <Row label="Progressive splits" v={PHIDIAS_RULES.payoutSplits.map((s) => `${s * 100}%`).join(" → ")} />
+            <Row label="Funded note" v={PHIDIAS_RULES.fundedDrawdownNote} />
+            <Row label="Sleeve eval target" v={`$${struct.totalEvalTarget.toLocaleString()}`} />
+            <Row label="Sleeve net progress" v={fmt$(portfolio.totalNet)} />
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Volatility */}
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-sm">Volatility regime context</CardTitle></CardHeader>
+        <CardContent className="text-sm space-y-1">
+          <Row label="Realistic monthly" v={EXPECTED_RETURNS.realisticMonthly} />
+          <Row label="Full-history median" v={EXPECTED_RETURNS.fullHistoryMedian} />
+          <Row label="p10 / p90" v={`${EXPECTED_RETURNS.p10} / ${EXPECTED_RETURNS.p90}`} />
+          <Row label="Holdout median" v={EXPECTED_RETURNS.holdout} />
+          <div className="text-xs italic text-warning mt-2">{EXPECTED_RETURNS.warning}</div>
+          <div className="text-xs italic text-muted-foreground mt-1">{EXPECTED_RETURNS.volatilityMessage}</div>
+          <div className="text-[11px] text-muted-foreground italic mt-1">{EXPECTED_RETURNS.disclaimer}</div>
         </CardContent>
       </Card>
 
       <Tabs defaultValue="overview">
-        <TabsList className="grid grid-cols-3 sm:grid-cols-6 w-full">
+        <TabsList className="grid grid-cols-3 w-full">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="legs">Per-leg</TabsTrigger>
-          <TabsTrigger value="payout">Payout</TabsTrigger>
-          <TabsTrigger value="risk">Risk</TabsTrigger>
-          <TabsTrigger value="exec">Execution</TabsTrigger>
-          <TabsTrigger value="watch">Watch</TabsTrigger>
+          <TabsTrigger value="legs">Per-leg & Kill rules</TabsTrigger>
+          <TabsTrigger value="exec">Execution & QA</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4 mt-4">
@@ -134,83 +272,78 @@ function ResultsPage() {
             <CardHeader className="pb-2"><CardTitle className="text-sm">Equity curve</CardTitle></CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={mergeEquity(equityPrim, equityGcFree)}>
+                <LineChart data={equity}>
                   <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                   <XAxis dataKey="day" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(v: number) => `$${v.toFixed(2)}`} />
                   <ReferenceLine y={0} stroke="hsl(var(--border))" />
-                  <Line dataKey="primary" name="Primary" stroke="hsl(var(--primary))" dot={false} strokeWidth={2} />
-                  <Line dataKey="gcFree" name="GC-free" stroke="hsl(var(--muted-foreground))" dot={false} strokeWidth={2} />
+                  <ReferenceLine y={-struct.totalDrawdown} stroke="hsl(var(--destructive))" strokeDasharray="3 3"
+                    label={{ value: `Sleeve DD −$${struct.totalDrawdown.toLocaleString()}`, fontSize: 10, fill: "hsl(var(--destructive))" }} />
+                  <Line dataKey="equity" name="Net" stroke="hsl(var(--primary))" dot={false} strokeWidth={2} />
                 </LineChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
 
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Drawdown</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Daily P&amp;L</CardTitle></CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={ddSeries(equityPrim)}>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={dailyAgg}>
                   <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                  <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+                  <XAxis dataKey="day" tick={{ fontSize: 10 }} />
                   <YAxis tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(v: number) => `$${v.toFixed(2)}`} />
-                  <ReferenceLine y={-5000} stroke="hsl(var(--destructive))" strokeDasharray="3 3" label={{ value: "MLL −$5,000", fontSize: 10, fill: "hsl(var(--destructive))" }} />
-                  <Line dataKey="dd" stroke="hsl(var(--destructive))" dot={false} strokeWidth={2} />
-                </LineChart>
+                  <ReferenceLine y={0} stroke="hsl(var(--border))" />
+                  <Bar dataKey="pnl" fill="hsl(var(--primary))" />
+                </BarChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
         </TabsContent>
 
         <TabsContent value="legs" className="space-y-4 mt-4">
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">P&amp;L by symbol</CardTitle></CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={SYMBOLS.map((sym) => ({ sym, primary: bySymbol[sym]?.totalCur ?? 0, gcFree: bySymbol[sym]?.totalOpt ?? 0 }))}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                  <XAxis dataKey="sym" />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v: number) => `$${v.toFixed(2)}`} />
-                  <Bar dataKey="primary" name="Primary" fill="hsl(var(--primary))" />
-                  <Bar dataKey="gcFree" name="GC-free" fill="hsl(var(--muted-foreground))" />
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
           <div className="grid md:grid-cols-2 gap-3">
-            {SYMBOLS.map((sym) => {
-              const v = bySymbol[sym] ?? emptySymStat();
-              const spec = STRATEGIES.find((s) => s.symbol === sym)!;
+            {STRATEGIES.map((s) => {
+              const v = perLeg[s.id] ?? emptyLegStat();
+              const rolling10Avg = v.trades > 0 ? v.rolling10Sum / Math.min(v.trades, 10) : 0;
+              const rolling10Pf = v.rolling10PF;
+              const hardKill = v.netTotal <= s.killRule.hardKillNet;
+              const streakKill = v.currentLosingStreak >= s.killRule.losingStreak;
+              const alert = rolling10Avg <= 0 || hardKill || streakKill;
               return (
-                <Card key={sym}>
-                  <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                    <CardTitle className="text-sm font-mono">{sym}</CardTitle>
-                    <Badge variant="outline" className="text-[10px]">×{spec.primaryQty}</Badge>
+                <Card key={s.id} className={alert ? "border-destructive/50" : ""}>
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="text-sm font-mono">{s.id}</CardTitle>
+                        <div className="text-[11px] text-muted-foreground font-mono">{s.symbol} · {s.family}</div>
+                      </div>
+                      {alert ? <Badge variant="destructive">ALERT</Badge> : <Badge variant="secondary">OK</Badge>}
+                    </div>
                   </CardHeader>
                   <CardContent className="text-sm space-y-1">
                     <Row label="Trades" v={String(v.trades)} />
-                    <Row label="Net P&L (Primary)" v={fmt$(v.totalCur)} />
-                    <Row label="Gross P&L" v={fmt$(v.grossCur)} />
-                    <Row label="Win rate" v={`${(v.winRate*100).toFixed(1)}%`} />
-                    <Row label="Profit factor" v={v.profitFactor.toFixed(2)} />
+                    <Row label="Net total" v={fmt$(v.netTotal)} />
+                    <Row label="Profit factor" v={v.pf.toFixed(2)} />
+                    <Row label="Win rate" v={`${(v.winRate * 100).toFixed(1)}%`} />
                     <Row label="Avg trade" v={fmt$(v.avgTrade)} />
-                    <Row label="Best / Worst" v={`${fmt$(v.best)} / ${fmt$(v.worst)}`} />
-                    <Row label="Max DD" v={fmt$(v.maxDD)} />
-                    <Row label="$250+ days contributed" v={String(v.days250)} />
-                    <Row label="Avg slippage ticks" v={v.avgSlipTicks.toFixed(2)} />
-                    <Row label="Actual − theoretical" v={fmt$(v.actualMinusTheo)} />
-                    <Row label="Rule errors" v={String(v.ruleErrors)} />
-                    <Row label="Missed" v={String(v.missed)} />
-                    {sym === "HG" && (
-                      <>
-                        <Row label="HG 16:30 late entries" v={String(v.lateEntries)} />
-                        <Row label="manual_flatten_before_1645" v={String(v.manualFlatten)} />
-                      </>
-                    )}
+                    <Row label="Rolling-10 avg" v={fmt$(rolling10Avg)} />
+                    <Row label="Rolling-10 PF" v={rolling10Pf.toFixed(2)} />
+                    <Row label="Current losing streak" v={String(v.currentLosingStreak)} />
+                    <div className="border-t mt-2 pt-2 text-[11px] text-muted-foreground space-y-0.5">
+                      <Row label="Alert threshold (rolling10 avg)" v={s.killRule.rolling10Alert.toString()} />
+                      <Row label="Hard-kill net" v={`$${s.killRule.hardKillNet}`} />
+                      <Row label="Losing-streak kill" v={String(s.killRule.losingStreak)} />
+                      <div className="pt-1">
+                        Status:{" "}
+                        {hardKill && <span className="text-destructive">hard-kill breach · </span>}
+                        {streakKill && <span className="text-destructive">streak breach · </span>}
+                        {rolling10Avg < s.killRule.rolling10Alert && v.trades >= 10 && <span className="text-warning">rolling alert</span>}
+                        {!hardKill && !streakKill && v.trades < 10 && <span>collecting data</span>}
+                      </div>
+                    </div>
                   </CardContent>
                 </Card>
               );
@@ -218,354 +351,189 @@ function ResultsPage() {
           </div>
         </TabsContent>
 
-        <TabsContent value="payout" className="space-y-4 mt-4">
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Lucid payout tracking</CardTitle></CardHeader>
-            <CardContent className="text-sm space-y-1">
-              <Row label="$250+ winning days" v={String(winningDays)} />
-              <Row label="Estimated payout cycles done" v={String(cycles)} />
-              <Row label="Days until next 5-day cycle" v={String(5 - (winningDays % 5))} />
-              <Row label="Best Lucid EOD day" v={fmt$(Math.max(0, ...dailyValues))} />
-              <Row label="Worst Lucid EOD day" v={fmt$(worstDay)} />
-              <Row label="Days since last $250+" v={String(daysSince(dailyPrim))} />
-              <Row label="Active days (taken)" v={String(dailyPrim.filter(d => d.trades > 0).length)} />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Daily P&amp;L (Primary)</CardTitle></CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={dailyPrim}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                  <XAxis dataKey="day" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v: number) => `$${v.toFixed(2)}`} />
-                  <ReferenceLine y={250} stroke="hsl(var(--success))" strokeDasharray="3 3" />
-                  <Bar dataKey="pnl" name="P&L" fill="hsl(var(--primary))" />
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="risk" className="space-y-4 mt-4">
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Risk / breach tracking</CardTitle></CardHeader>
-            <CardContent className="text-sm space-y-1">
-              <Row label="Current equity" v={fmt$(eq.at(-1)?.equity ?? 0)} />
-              <Row label="Peak equity" v={fmt$(peakEq)} />
-              <Row label="Current drawdown" v={fmt$(ddNow)} />
-              <Row label="MLL estimate (≤ −$5,000)" v={mllBreach ? "BREACH" : "OK"} />
-              <Row label="Worst rolling 5-day" v={fmt$(rollingWorst(dailyValues, 5))} />
-              <Row label="Worst rolling 10-day" v={fmt$(rollingWorst(dailyValues, 10))} />
-              <Row label="Days ≤ −$1,000" v={String(dailyValues.filter(v => v <= -1000).length)} />
-              <Row label="Days ≤ −$2,000" v={String(dailyValues.filter(v => v <= -2000).length)} />
-              <Row label="Days ≤ −$3,000" v={String(dailyValues.filter(v => v <= -3000).length)} />
-              <Row label="DLL soft-lock days est. (≤ −$3,000)" v={String(dllSoftLockDays)} />
-            </CardContent>
-          </Card>
-        </TabsContent>
-
         <TabsContent value="exec" className="space-y-4 mt-4">
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Execution quality</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Execution dashboard</CardTitle></CardHeader>
             <CardContent className="text-sm space-y-1">
-              <Row label="Theoretical P&L" v={fmt$(exec.theoretical)} />
-              <Row label="Actual P&L" v={fmt$(exec.actual)} />
-              <Row label="Actual − theoretical" v={fmt$(exec.actualMinusTheo)} />
-              <Row label="Avg slippage ticks" v={exec.avgSlipTicks.toFixed(2)} />
-              <Row label="Avg slippage $" v={fmt$(exec.avgSlipDollars)} />
-              <Row label="Missed trades" v={String(exec.missed)} />
-              <Row label="Late entries (HG 16:30)" v={String(exec.lateEntries)} />
-              <Row label="Rule errors" v={String(exec.ruleErrors)} />
-              <Row label="Manual overrides (manual_flatten)" v={String(exec.manualOverrides)} />
-              <Row label="Cutoff exits" v={String(exec.manualOverrides)} />
+              <Row label="Theoretical PnL (sum)" v={fmt$(execStats.theoretical)} />
+              <Row label="Actual PnL (sum)" v={fmt$(execStats.actual)} />
+              <Row label="Δ Actual − theoretical" v={fmt$(execStats.actualMinusTheo)} />
+              <Row label="Slippage est. total" v={fmt$(execStats.slippage)} />
+              <Row label="Commissions total" v={fmt$(execStats.commissions)} />
+              <Row label="Rule errors" v={String(execStats.ruleErrors)} />
+              <Row label="Late entries" v={String(execStats.lateEntries)} />
+              <Row label="Wrong side" v={String(execStats.wrongSide)} />
+              <Row label="Wrong size" v={String(execStats.wrongSize)} />
+              <Row label="Entry at signal close warnings" v={String(execStats.entryAtSignalClose)} />
+              <Row label="Exits after 16:45 ET" v={String(execStats.exitAfter1645)} />
+              <Row label="Hard flat compliance" v={`${execStats.totalExits === 0 ? "—" : `${((1 - execStats.exitAfter1645 / Math.max(1, execStats.totalExits)) * 100).toFixed(1)}%`}`} />
             </CardContent>
           </Card>
-        </TabsContent>
 
-        <TabsContent value="watch" className="space-y-4 mt-4">
-          <WatchCard sym="GC" w={gcWatch} note="Korkein EV mutta riskisin jalka. Hälytys jos rolling 10 < −3000 tai 3 stoppia peräkkäin." />
-          <WatchCard sym="MES" w={mesWatch} note="Micro-strategia — validoi paper data huolella. Hälytys jos rolling 10 < −2000." />
-          <WatchCard sym="YM" w={ymWatch} note="02:30 fill-laatu kriittinen. Hälytys jos rolling 10 < −2000." />
-          <WatchCard sym="HG" w={hgWatch} note="16:30 entry → seuraa manual_flatten määrää." />
+          <TestRunner />
         </TabsContent>
       </Tabs>
     </div>
   );
 }
 
-// ----- helpers -----
+// ===== helpers =====
 
-type Stats = {
-  totalNet: number; totalGross: number; trades: number; winRate: number;
-  profitFactor: number; avgWin: number; avgLoss: number;
-  bestTrade: number; worstTrade: number; bestDay: number; worstDay: number;
-  maxDrawdown: number; winningDays250: number;
-};
-
-function computeStats(trades: T[], side: "current" | "optimized"): Stats {
-  const taken = trades.filter((t) => t.trade_status === "Taken");
-  const pnls = taken.map((t) => Number(side === "current" ? t.net_pnl_current : t.net_pnl_optimized) || 0);
-  const gross = taken.map((t) => Number(side === "current" ? t.gross_pnl_current : t.gross_pnl_optimized) || 0);
+function computePortfolio(taken: T[]) {
+  const pnls = taken.map((t) => Number(t.net_pnl_current ?? t.actual_pnl) || 0);
+  const gross = taken.map((t) => Number(t.gross_pnl_current) || 0);
   const wins = pnls.filter((p) => p > 0);
   const losses = pnls.filter((p) => p < 0);
   const totalNet = pnls.reduce((a, b) => a + b, 0);
   const totalGross = gross.reduce((a, b) => a + b, 0);
-  const sumWins = wins.reduce((a, b) => a + b, 0);
-  const sumLosses = Math.abs(losses.reduce((a, b) => a + b, 0));
-  const profitFactor = sumLosses === 0 ? (sumWins > 0 ? Infinity : 0) : sumWins / sumLosses;
-  const byDay = groupByDay(taken, side);
-  const dayValues = Object.values(byDay);
-  return {
-    totalNet, totalGross, trades: taken.length,
-    winRate: taken.length ? wins.length / taken.length : 0,
-    profitFactor: Number.isFinite(profitFactor) ? profitFactor : 0,
-    avgWin: wins.length ? sumWins / wins.length : 0,
-    avgLoss: losses.length ? -sumLosses / losses.length : 0,
-    bestTrade: pnls.length ? Math.max(...pnls) : 0,
-    worstTrade: pnls.length ? Math.min(...pnls) : 0,
-    bestDay: dayValues.length ? Math.max(...dayValues) : 0,
-    worstDay: dayValues.length ? Math.min(...dayValues) : 0,
-    maxDrawdown: drawdown(taken, side),
-    winningDays250: dayValues.filter((v) => v >= 250).length,
-  };
-}
-
-function drawdown(taken: T[], side: "current" | "optimized") {
-  let peak = 0, eq = 0, dd = 0;
-  const sorted = [...taken].sort((a, b) => (a.lucid_eod_day ?? "").localeCompare(b.lucid_eod_day ?? ""));
+  const sumW = wins.reduce((a, b) => a + b, 0);
+  const sumL = Math.abs(losses.reduce((a, b) => a + b, 0));
+  const profitFactor = sumL === 0 ? (sumW > 0 ? 99 : 0) : sumW / sumL;
+  const daily = dailyPnl(taken).map((d) => d.pnl);
+  // max DD
+  let eq = 0, peak = 0, dd = 0;
+  const sorted = [...taken].sort((a, b) => (a.date_et ?? "").localeCompare(b.date_et ?? ""));
   for (const t of sorted) {
-    eq += Number(side === "current" ? t.net_pnl_current : t.net_pnl_optimized) || 0;
+    eq += Number(t.net_pnl_current ?? t.actual_pnl) || 0;
     if (eq > peak) peak = eq;
     dd = Math.min(dd, eq - peak);
   }
+  return {
+    totalNet, totalGross,
+    profitFactor,
+    winRate: pnls.length ? wins.length / pnls.length : 0,
+    avgWin: wins.length ? sumW / wins.length : 0,
+    avgLoss: losses.length ? -sumL / losses.length : 0,
+    bestTrade: pnls.length ? Math.max(...pnls) : 0,
+    worstTrade: pnls.length ? Math.min(...pnls) : 0,
+    bestDay: daily.length ? Math.max(...daily) : 0,
+    worstDay: daily.length ? Math.min(...daily) : 0,
+    maxDrawdown: dd,
+  };
+}
+
+function dailyPnl(taken: T[]): { day: string; pnl: number }[] {
+  const m = new Map<string, number>();
+  for (const t of taken) {
+    const k = t.date_et ?? "—";
+    m.set(k, (m.get(k) ?? 0) + (Number(t.net_pnl_current ?? t.actual_pnl) || 0));
+  }
+  return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([day, pnl]) => ({ day, pnl }));
+}
+
+function equityCurve(taken: T[]) {
+  const daily = dailyPnl(taken);
+  let eq = 0;
+  return daily.map((d) => { eq += d.pnl; return { day: d.day, equity: eq }; });
+}
+
+function computeEodTrailingDD(eq: { day: string; equity: number }[]): number {
+  let peak = 0, dd = 0;
+  for (const p of eq) { peak = Math.max(peak, p.equity); dd = Math.min(dd, p.equity - peak); }
   return dd;
 }
 
-function groupByDay(trades: T[], side: "current" | "optimized"): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const t of trades) {
-    const k = t.lucid_eod_day ?? t.date_et ?? "—";
-    out[k] = (out[k] ?? 0) + (Number(side === "current" ? t.net_pnl_current : t.net_pnl_optimized) || 0);
+function emptyLegStat() {
+  return {
+    trades: 0, netTotal: 0, pf: 0, winRate: 0, avgTrade: 0,
+    rolling10Sum: 0, rolling10PF: 0, currentLosingStreak: 0,
+  };
+}
+
+function perLegStats(trades: T[]): Record<string, ReturnType<typeof emptyLegStat>> {
+  const out: Record<string, ReturnType<typeof emptyLegStat>> = {};
+  for (const s of STRATEGIES) {
+    const sub = trades
+      .filter((t) => t.leg_id === s.id && t.trade_status === "taken")
+      .sort((a, b) => (a.date_et ?? "").localeCompare(b.date_et ?? ""));
+    const pnls = sub.map((t) => Number(t.net_pnl_current ?? t.actual_pnl) || 0);
+    const wins = pnls.filter((p) => p > 0);
+    const losses = pnls.filter((p) => p < 0);
+    const sumW = wins.reduce((a, b) => a + b, 0);
+    const sumL = Math.abs(losses.reduce((a, b) => a + b, 0));
+    const last10 = pnls.slice(-10);
+    const last10W = last10.filter((p) => p > 0).reduce((a, b) => a + b, 0);
+    const last10L = Math.abs(last10.filter((p) => p < 0).reduce((a, b) => a + b, 0));
+    let streak = 0;
+    for (let i = pnls.length - 1; i >= 0; i--) {
+      if (pnls[i] < 0) streak++;
+      else break;
+    }
+    out[s.id] = {
+      trades: sub.length,
+      netTotal: pnls.reduce((a, b) => a + b, 0),
+      pf: sumL === 0 ? (sumW > 0 ? 99 : 0) : sumW / sumL,
+      winRate: pnls.length ? wins.length / pnls.length : 0,
+      avgTrade: pnls.length ? pnls.reduce((a, b) => a + b, 0) / pnls.length : 0,
+      rolling10Sum: last10.reduce((a, b) => a + b, 0),
+      rolling10PF: last10L === 0 ? (last10W > 0 ? 99 : 0) : last10W / last10L,
+      currentLosingStreak: streak,
+    };
   }
   return out;
 }
 
-function dailyAgg(trades: T[], side: "current" | "optimized"): { day: string; pnl: number; trades: number }[] {
-  const map = new Map<string, { pnl: number; trades: number }>();
-  for (const t of trades.filter((x) => x.trade_status === "Taken")) {
-    const k = t.lucid_eod_day ?? t.date_et ?? "—";
-    const e = map.get(k) ?? { pnl: 0, trades: 0 };
-    e.pnl += Number(side === "current" ? t.net_pnl_current : t.net_pnl_optimized) || 0;
-    e.trades += 1;
-    map.set(k, e);
-  }
-  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([day, v]) => ({ day, ...v }));
-}
-
-type SymStat = ReturnType<typeof emptySymStat>;
-function bySym(trades: T[]): Record<Symbol, SymStat> {
-  const out: Partial<Record<Symbol, SymStat>> = {};
-  for (const sym of SYMBOLS) {
-    const sub = trades.filter((t) => t.symbol === sym && t.trade_status === "Taken");
-    const all = trades.filter((t) => t.symbol === sym);
-    const pnlsC = sub.map((t) => Number(t.net_pnl_current) || 0);
-    const pnlsO = sub.map((t) => Number(t.net_pnl_optimized) || 0);
-    const gross = sub.map((t) => Number(t.gross_pnl_current) || 0);
-    const wins = pnlsC.filter((p) => p > 0).length;
-    const sumW = pnlsC.filter((p) => p > 0).reduce((a, b) => a + b, 0);
-    const sumL = Math.abs(pnlsC.filter((p) => p < 0).reduce((a, b) => a + b, 0));
-    const tickSize = TICK[sym].size;
-    const slipTicks = sub
-      .filter((t) => t.entry_price_actual != null && t.entry_price_theoretical != null)
-      .map((t) => Math.abs(Number(t.entry_price_actual) - Number(t.entry_price_theoretical)) / tickSize);
-    const amt = sub
-      .filter((t) => t.actual_minus_theoretical != null)
-      .map((t) => Number(t.actual_minus_theoretical));
-    const days = new Map<string, number>();
-    for (const t of sub) {
-      const k = t.lucid_eod_day ?? t.date_et ?? "—";
-      days.set(k, (days.get(k) ?? 0) + (Number(t.net_pnl_current) || 0));
-    }
-    out[sym] = {
-      totalCur: pnlsC.reduce((a, b) => a + b, 0),
-      totalOpt: pnlsO.reduce((a, b) => a + b, 0),
-      grossCur: gross.reduce((a, b) => a + b, 0),
-      trades: sub.length,
-      winRate: sub.length ? wins / sub.length : 0,
-      profitFactor: sumL === 0 ? (sumW > 0 ? 99 : 0) : sumW / sumL,
-      avgTrade: sub.length ? pnlsC.reduce((a, b) => a + b, 0) / sub.length : 0,
-      best: pnlsC.length ? Math.max(...pnlsC) : 0,
-      worst: pnlsC.length ? Math.min(...pnlsC) : 0,
-      maxDD: drawdown(sub, "current"),
-      days250: [...days.values()].filter((v) => v >= 250).length,
-      avgSlipTicks: slipTicks.length ? slipTicks.reduce((a, b) => a + b, 0) / slipTicks.length : 0,
-      actualMinusTheo: amt.length ? amt.reduce((a, b) => a + b, 0) : 0,
-      ruleErrors: all.filter((t) => t.rule_followed === false).length,
-      missed: all.filter((t) => t.trade_status === "Missed").length,
-      lateEntries: sym === "HG" ? all.filter((t) => t.entry_time_et === "16:30").length : 0,
-      manualFlatten: sym === "HG" ? all.filter((t) => t.exit_reason === "manual_flatten_before_1645").length : 0,
-    };
-  }
-  return out as Record<Symbol, SymStat>;
-}
-
-function emptySymStat() {
+function executionStats(trades: T[]) {
+  const theoretical = trades.reduce((a, t) => a + (Number(t.theoretical_pnl) || 0), 0);
+  const actual = trades.reduce((a, t) => a + (Number(t.actual_pnl ?? t.net_pnl_current) || 0), 0);
+  const slippage = trades.reduce((a, t) => a + (Number(t.slippage_est) || 0), 0);
+  const commissions = trades.reduce((a, t) => a + (Number(t.commissions_current) || 0), 0);
+  const ruleErrors = trades.filter((t) => t.rule_followed === false).length;
+  const exitAfter1645 = trades.filter((t) => t.exit_time_et && t.exit_time_et > "16:45").length;
+  const totalExits = trades.filter((t) => t.exit_time_et).length;
   return {
-    totalCur: 0, totalOpt: 0, grossCur: 0, trades: 0, winRate: 0, profitFactor: 0,
-    avgTrade: 0, best: 0, worst: 0, maxDD: 0, days250: 0,
-    avgSlipTicks: 0, actualMinusTheo: 0, ruleErrors: 0, missed: 0,
-    lateEntries: 0, manualFlatten: 0,
+    theoretical, actual, actualMinusTheo: actual - theoretical,
+    slippage, commissions,
+    ruleErrors,
+    lateEntries: trades.filter((t) => t.rule_error_type === "late_entry").length,
+    wrongSide: trades.filter((t) => t.rule_error_type === "wrong_side").length,
+    wrongSize: trades.filter((t) => t.rule_error_type === "wrong_size").length,
+    entryAtSignalClose: trades.filter((t) =>
+      t.rule_error_type === "entry_at_signal_close"
+      || (t.signal_time_et && t.entry_time_et && t.signal_time_et === t.entry_time_et)
+    ).length,
+    exitAfter1645,
+    totalExits,
   };
 }
 
-function equityCurve(trades: T[], side: "current" | "optimized") {
-  const grouped = groupByDay(trades.filter((t) => t.trade_status === "Taken"), side);
-  const days = Object.keys(grouped).sort();
-  let eq = 0;
-  return days.map((d) => {
-    eq += grouped[d];
-    return { day: d, equity: eq, daily: grouped[d] };
-  });
-}
-
-function mergeEquity(a: { day: string; equity: number }[], b: { day: string; equity: number }[]) {
-  const map = new Map<string, { day: string; primary?: number; gcFree?: number }>();
-  for (const x of a) map.set(x.day, { day: x.day, primary: x.equity });
-  for (const x of b) {
-    const e = map.get(x.day) ?? { day: x.day };
-    e.gcFree = x.equity;
-    map.set(x.day, e);
-  }
-  return [...map.values()].sort((x, y) => x.day.localeCompare(y.day));
-}
-
-function ddSeries(eq: { day: string; equity: number }[]) {
-  let peak = 0;
-  return eq.map((p) => { peak = Math.max(peak, p.equity); return { day: p.day, dd: p.equity - peak }; });
-}
-
-function execQuality(trades: T[]) {
-  const taken = trades.filter((t) => t.trade_status === "Taken");
-  const theoretical = taken.reduce((a, t) => a + (Number(t.theoretical_pnl) || 0), 0);
-  const actual = taken.reduce((a, t) => a + (Number(t.actual_pnl ?? t.net_pnl_current) || 0), 0);
-  const slipTicks: number[] = [];
-  const slipDollars: number[] = [];
-  for (const t of taken) {
-    if (t.entry_price_actual != null && t.entry_price_theoretical != null) {
-      const tickSize = TICK[t.symbol as Symbol]?.size ?? 1;
-      const tickValue = TICK[t.symbol as Symbol]?.value ?? 0;
-      const ticks = Math.abs(Number(t.entry_price_actual) - Number(t.entry_price_theoretical)) / tickSize;
-      slipTicks.push(ticks);
-      slipDollars.push(ticks * tickValue);
-    }
-  }
-  return {
-    theoretical, actual,
-    actualMinusTheo: actual - theoretical,
-    avgSlipTicks: slipTicks.length ? slipTicks.reduce((a, b) => a + b, 0) / slipTicks.length : 0,
-    avgSlipDollars: slipDollars.length ? slipDollars.reduce((a, b) => a + b, 0) / slipDollars.length : 0,
-    missed: trades.filter((t) => t.trade_status === "Missed").length,
-    ruleErrors: trades.filter((t) => t.rule_followed === false).length,
-    lateEntries: trades.filter((t) => t.symbol === "HG" && t.entry_time_et === "16:30").length,
-    manualOverrides: trades.filter((t) => t.exit_reason === "manual_flatten_before_1645").length,
+function EligibilityBadge({ value }: { value: string }) {
+  const map: Record<string, { cls: string; label: string }> = {
+    not_enough: { cls: "bg-muted text-muted-foreground", label: "Not enough data" },
+    review: { cls: "bg-success text-success-foreground", label: "Eligible for review" },
+    pause: { cls: "bg-warning text-warning-foreground", label: "Pause" },
+    kill_review: { cls: "bg-destructive text-destructive-foreground", label: "Kill review" },
   };
+  const v = map[value];
+  return <span className={`text-[10px] uppercase px-2 py-0.5 rounded font-medium ${v.cls}`}>{v.label}</span>;
 }
 
-function buildWatch(trades: T[], sym: Symbol, threshold: number) {
-  const sub = trades
-    .filter((t) => t.symbol === sym && t.trade_status === "Taken")
-    .sort((a, b) => (a.lucid_eod_day ?? "").localeCompare(b.lucid_eod_day ?? ""));
-  const pnls = sub.map((t) => Number(t.net_pnl_current) || 0);
-  const rolling10 = pnls.slice(-10).reduce((a, b) => a + b, 0);
-  const rolling5 = pnls.slice(-5).reduce((a, b) => a + b, 0);
-  const total = pnls.reduce((a, b) => a + b, 0);
-  // streak of stops
-  let streak = 0;
-  for (let i = sub.length - 1; i >= 0; i--) {
-    if (sub[i].exit_reason === "stop") streak++;
-    else break;
-  }
-  return {
-    rolling5, rolling10, total, threshold,
-    threeStops: streak >= 3,
-    alert: rolling10 < threshold || total < threshold,
-    trades: sub.length,
-    streak,
-  };
-}
-
-function rollingWorst(values: number[], window: number) {
-  if (values.length < 1) return 0;
-  let worst = 0;
-  for (let i = 0; i + window <= values.length; i++) {
-    const sum = values.slice(i, i + window).reduce((a, b) => a + b, 0);
-    if (sum < worst) worst = sum;
-  }
-  return worst;
-}
-
-function daysSince(daily: { day: string; pnl: number }[]) {
-  for (let i = daily.length - 1, n = 0; i >= 0; i--, n++) {
-    if (daily[i].pnl >= 250) return n;
-  }
-  return daily.length;
-}
-
-function PortfolioStatsCard({
-  title, stats, accent, extras,
-}: {
-  title: string;
-  stats: Stats;
-  accent: "primary" | "muted";
-  extras: { winningDays: number; cycles: number; ddNow: number; worstDay: number };
-}) {
+function TestRunner() {
+  const [results, setResults] = useState<ReturnType<typeof runPhidiasTests> | null>(null);
   return (
-    <Card className={accent === "primary" ? "border-primary/40" : ""}>
+    <Card>
       <CardHeader className="pb-2 flex flex-row items-center justify-between">
-        <CardTitle className="text-base">{title}</CardTitle>
-        <Badge variant={accent === "primary" ? "default" : "secondary"}>{stats.trades} treidiä</Badge>
+        <CardTitle className="text-sm">Self-tests (PnL & signaali)</CardTitle>
+        <Button size="sm" variant="outline" onClick={() => setResults(runPhidiasTests())}>Suorita testit</Button>
       </CardHeader>
       <CardContent>
-        <div className={`text-3xl font-bold tabular-nums mb-3 ${stats.totalNet >= 0 ? "text-success" : "text-destructive"}`}>
-          {fmt$(stats.totalNet)}
-        </div>
-        <div className="grid grid-cols-2 gap-y-1 gap-x-4 text-sm">
-          <Row label="Gross P&L" v={fmt$(stats.totalGross)} />
-          <Row label="Win rate" v={`${(stats.winRate*100).toFixed(1)}%`} />
-          <Row label="Profit factor" v={stats.profitFactor.toFixed(2)} />
-          <Row label="Avg win" v={fmt$(stats.avgWin)} />
-          <Row label="Avg loss" v={fmt$(stats.avgLoss)} />
-          <Row label="Best trade" v={fmt$(stats.bestTrade)} />
-          <Row label="Worst trade" v={fmt$(stats.worstTrade)} />
-          <Row label="Best day" v={fmt$(stats.bestDay)} />
-          <Row label="Worst day" v={fmt$(stats.worstDay)} />
-          <Row label="Max drawdown" v={fmt$(stats.maxDrawdown)} />
-          <Row label="$250+ days" v={String(extras.winningDays)} />
-          <Row label="Payout cycles" v={String(extras.cycles)} />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function WatchCard({ sym, w, note }: { sym: Symbol; w: ReturnType<typeof buildWatch>; note: string }) {
-  return (
-    <Card className={w.alert ? "border-destructive/50" : ""}>
-      <CardHeader className="pb-2 flex flex-row items-center justify-between">
-        <CardTitle className="text-sm font-mono">{sym} watch</CardTitle>
-        {w.alert ? <Badge variant="destructive">ALERT</Badge> : <Badge variant="secondary">OK</Badge>}
-      </CardHeader>
-      <CardContent className="text-sm space-y-1">
-        <div className="text-xs text-muted-foreground mb-2">{note}</div>
-        <Row label="Trades" v={String(w.trades)} />
-        <Row label="Total net" v={fmt$(w.total)} />
-        <Row label="Rolling 5-trade" v={fmt$(w.rolling5)} />
-        <Row label="Rolling 10-trade" v={fmt$(w.rolling10)} />
-        <Row label="Stop streak (current)" v={String(w.streak)} />
-        <Row label="Threshold" v={fmt$(w.threshold)} />
+        {!results ? (
+          <div className="text-xs text-muted-foreground">Paina &ldquo;Suorita testit&rdquo; ajaaksesi PnL- ja signaalitestit.</div>
+        ) : (
+          <ul className="space-y-1.5 text-sm">
+            {results.map((r) => (
+              <li key={r.name} className="flex items-start gap-2">
+                {r.pass
+                  ? <CheckCircle2 className="h-4 w-4 text-success shrink-0 mt-0.5" />
+                  : <XCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />}
+                <div>
+                  <div className="font-medium">{r.name}</div>
+                  <div className="text-xs text-muted-foreground font-mono">{r.detail}</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </CardContent>
     </Card>
   );

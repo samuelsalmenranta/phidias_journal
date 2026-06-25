@@ -88,8 +88,12 @@ export type Database = {
       }
       trades: {
         Row: {
+          account_label: string | null
+          account_structure: string | null
           actual_minus_theoretical: number | null
           actual_pnl: number | null
+          atr_period: number | null
+          atr_value: number | null
           body_fraction: number | null
           body_pct: number | null
           commissions_current: number | null
@@ -100,6 +104,8 @@ export type Database = {
           current_session_open: number | null
           date_et: string | null
           direction: string | null
+          distance: number | null
+          distance_threshold: number | null
           entry_price_actual: number | null
           entry_price_theoretical: number | null
           entry_time_et: string | null
@@ -109,11 +115,15 @@ export type Database = {
           exit_price_theoretical: number | null
           exit_reason: string | null
           exit_time_et: string | null
+          family: string | null
           gap_pct: number | null
           gc_watch_flags: string | null
           gross_pnl_current: number | null
           gross_pnl_optimized: number | null
+          hard_flat_relevant: boolean | null
           id: string
+          leg_id: string | null
+          lower_threshold: number | null
           lucid_eod_day: string | null
           mini_equivalent: number | null
           move_pct: number | null
@@ -121,27 +131,47 @@ export type Database = {
           net_pnl_optimized: number | null
           notes: string | null
           optimized_qty: number | null
+          overnight_high: number | null
+          overnight_low: number | null
+          phase: string | null
           portfolio_version: string | null
+          prev_close: number | null
           prev_context_close: number | null
           prev_context_open: number | null
+          prev_high: number | null
+          prev_low: number | null
+          qty: number | null
+          r4: number | null
           rule_error_type: string | null
           rule_followed: boolean | null
+          s4: number | null
           session_name: string | null
           setup_value: number | null
+          signal_close: number | null
           signal_time_et: string | null
+          slippage_est: number | null
           slippage_ticks: number | null
+          stop_multiple: number | null
           stop_price: number | null
           strategy_name: string | null
           symbol: string
+          target_multiple: number | null
           target_price: number | null
           theoretical_pnl: number | null
+          time_exit_time: string | null
+          timeframe: string | null
           trade_status: string | null
           updated_at: string
+          upper_threshold: number | null
           user_id: string
         }
         Insert: {
+          account_label?: string | null
+          account_structure?: string | null
           actual_minus_theoretical?: number | null
           actual_pnl?: number | null
+          atr_period?: number | null
+          atr_value?: number | null
           body_fraction?: number | null
           body_pct?: number | null
           commissions_current?: number | null
@@ -152,6 +182,8 @@ export type Database = {
           current_session_open?: number | null
           date_et?: string | null
           direction?: string | null
+          distance?: number | null
+          distance_threshold?: number | null
           entry_price_actual?: number | null
           entry_price_theoretical?: number | null
           entry_time_et?: string | null
@@ -161,11 +193,15 @@ export type Database = {
           exit_price_theoretical?: number | null
           exit_reason?: string | null
           exit_time_et?: string | null
+          family?: string | null
           gap_pct?: number | null
           gc_watch_flags?: string | null
           gross_pnl_current?: number | null
           gross_pnl_optimized?: number | null
+          hard_flat_relevant?: boolean | null
           id?: string
+          leg_id?: string | null
+          lower_threshold?: number | null
           lucid_eod_day?: string | null
           mini_equivalent?: number | null
           move_pct?: number | null
@@ -173,27 +209,47 @@ export type Database = {
           net_pnl_optimized?: number | null
           notes?: string | null
           optimized_qty?: number | null
+          overnight_high?: number | null
+          overnight_low?: number | null
+          phase?: string | null
           portfolio_version?: string | null
+          prev_close?: number | null
           prev_context_close?: number | null
           prev_context_open?: number | null
+          prev_high?: number | null
+          prev_low?: number | null
+          qty?: number | null
+          r4?: number | null
           rule_error_type?: string | null
           rule_followed?: boolean | null
+          s4?: number | null
           session_name?: string | null
           setup_value?: number | null
+          signal_close?: number | null
           signal_time_et?: string | null
+          slippage_est?: number | null
           slippage_ticks?: number | null
+          stop_multiple?: number | null
           stop_price?: number | null
           strategy_name?: string | null
           symbol: string
+          target_multiple?: number | null
           target_price?: number | null
           theoretical_pnl?: number | null
+          time_exit_time?: string | null
+          timeframe?: string | null
           trade_status?: string | null
           updated_at?: string
+          upper_threshold?: number | null
           user_id: string
         }
         Update: {
+          account_label?: string | null
+          account_structure?: string | null
           actual_minus_theoretical?: number | null
           actual_pnl?: number | null
+          atr_period?: number | null
+          atr_value?: number | null
           body_fraction?: number | null
           body_pct?: number | null
           commissions_current?: number | null
@@ -204,6 +260,8 @@ export type Database = {
           current_session_open?: number | null
           date_et?: string | null
           direction?: string | null
+          distance?: number | null
+          distance_threshold?: number | null
           entry_price_actual?: number | null
           entry_price_theoretical?: number | null
           entry_time_et?: string | null
@@ -213,11 +271,15 @@ export type Database = {
           exit_price_theoretical?: number | null
           exit_reason?: string | null
           exit_time_et?: string | null
+          family?: string | null
           gap_pct?: number | null
           gc_watch_flags?: string | null
           gross_pnl_current?: number | null
           gross_pnl_optimized?: number | null
+          hard_flat_relevant?: boolean | null
           id?: string
+          leg_id?: string | null
+          lower_threshold?: number | null
           lucid_eod_day?: string | null
           mini_equivalent?: number | null
           move_pct?: number | null
@@ -225,22 +287,38 @@ export type Database = {
           net_pnl_optimized?: number | null
           notes?: string | null
           optimized_qty?: number | null
+          overnight_high?: number | null
+          overnight_low?: number | null
+          phase?: string | null
           portfolio_version?: string | null
+          prev_close?: number | null
           prev_context_close?: number | null
           prev_context_open?: number | null
+          prev_high?: number | null
+          prev_low?: number | null
+          qty?: number | null
+          r4?: number | null
           rule_error_type?: string | null
           rule_followed?: boolean | null
+          s4?: number | null
           session_name?: string | null
           setup_value?: number | null
+          signal_close?: number | null
           signal_time_et?: string | null
+          slippage_est?: number | null
           slippage_ticks?: number | null
+          stop_multiple?: number | null
           stop_price?: number | null
           strategy_name?: string | null
           symbol?: string
+          target_multiple?: number | null
           target_price?: number | null
           theoretical_pnl?: number | null
+          time_exit_time?: string | null
+          timeframe?: string | null
           trade_status?: string | null
           updated_at?: string
+          upper_threshold?: number | null
           user_id?: string
         }
         Relationships: []
