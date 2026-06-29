@@ -289,7 +289,34 @@ export const GENERAL_RULES = [
 ];
 
 // ---- PnL formulas --------------------------------------------------------
+export function parseMarketNumber(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
+  if (value === null || value === undefined) return NaN;
 
+  const raw = String(value)
+    .trim()
+    .replace(/\s/g, "")
+    .replace(/[$€]/g, "");
+
+  if (!raw) return NaN;
+
+  const hasComma = raw.includes(",");
+  const hasDot = raw.includes(".");
+  let normalized = raw;
+
+  if (hasComma && hasDot) {
+    normalized = raw.replace(/,/g, "");
+  } else if (hasComma) {
+    const parts = raw.split(",");
+    const last = parts[parts.length - 1] ?? "";
+    normalized = parts.length === 2 && last.length <= 2
+      ? `${parts[0]}.${last}`
+      : raw.replace(/,/g, "");
+  }
+
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
 export function ticksBetween(
   symbol: Symbol,
   direction: "long" | "short",
