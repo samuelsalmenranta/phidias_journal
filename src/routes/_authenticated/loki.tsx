@@ -354,7 +354,7 @@ function TradeFormDialog({
   }, [legId, initial]);
 
   // ===== Auto-calc =====
-  const atrNum = parseFloat(atrValue);
+  const atrNum = parseFloat(signalClose);
   const sigCloseNum = parseFloat(signalClose);
   const ctx = {
     prevHigh: parseFloat(prevHigh) || undefined,
@@ -379,7 +379,7 @@ function TradeFormDialog({
 
   // Auto stop/target prices from entry + ATR + multiples
   useEffect(() => {
-    const ep = parseFloat(entryAct || entryTheo || "");
+    const ep = parseMarketNumber(entryAct || entryTheo || "");
     if (isNaN(ep) || isNaN(atrNum) || atrNum <= 0) return;
     const stopDist = stopMul * atrNum;
     const targetDist = targetMul * atrNum;
@@ -394,17 +394,17 @@ function TradeFormDialog({
   }, [entryAct, entryTheo, atrValue, direction, stopMul, targetMul]);
 
   const pnlPreview = useMemo(() => {
-    const epT = parseFloat(entryTheo || entryAct || "");
-    const xpT = parseFloat(exitTheo || exitAct || "");
+    const epT = parseMarketNumber(entryTheo || entryAct || "");
+    const xpT = parseMarketNumber(exitTheo || exitAct || "");
     const epA = parseFloat(entryAct || entryTheo || "");
-    const xpA = parseFloat(exitAct || exitTheo || "");
+    const xpA = parseMarketNumber(exitAct || exitTheo || "");
     if (direction !== "long" && direction !== "short") return { theo: null, act: null };
     const theoGross = !isNaN(epT) && !isNaN(xpT)
       ? computeGrossPnl(spec.symbol, direction, epT, xpT, qty) : null;
     const actGross = !isNaN(epA) && !isNaN(xpA)
       ? computeGrossPnl(spec.symbol, direction, epA, xpA, qty) : null;
-    const comm = parseFloat(commissions) || 0;
-    const slip = parseFloat(slippage) || 0;
+    const comm = parseMarketNumber(commissions) || 0;
+    const slip = parseMarketNumber(slippage) || 0;
     return {
       theo: theoGross !== null ? theoGross - comm : null,
       act: actGross !== null ? actGross - comm - slip : null,
@@ -750,7 +750,7 @@ function Warn({ children }: { children: React.ReactNode }) {
 
 function numOrNull(v: string): number | null {
   if (v === "" || v === undefined || v === null) return null;
-  const n = parseFloat(v);
+  const n = parseMarketNumber(v);
   return isNaN(n) ? null : n;
 }
 
