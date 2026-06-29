@@ -14,7 +14,7 @@ import { Plus, Pencil, Trash2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import {
   STRATEGIES, TICK, getStrategy,
-  computeGrossPnl, computeCommission, computeThresholds, evaluateSignal,
+  computeGrossPnl, computeCommission, computeThresholds, evaluateSignal, parseMarketNumber,
   type Symbol,
 } from "@/lib/strategies";
 
